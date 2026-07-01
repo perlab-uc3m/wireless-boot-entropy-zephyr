@@ -1,0 +1,15 @@
+&wifi {
+	status = "okay";
+};
+
+/ {
+	chosen {
+		zephyr,entropy = &entropy_blake2s;
+	};
+
+	entropy_blake2s: entropy-blake2s-pool {
+		compatible = "zephyr,entropy-blake2s-pool";
+		hardware-device = <&trng0>;
+		status = "okay";
+	};
+};

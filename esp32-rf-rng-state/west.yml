@@ -1,0 +1,21 @@
+manifest:
+  defaults:
+    remote: zephyrproject
+
+  remotes:
+    - name: zephyrproject
+      url-base: https://github.com/zephyrproject-rtos
+
+  projects:
+    # Stock Zephyr v4.1.0 - NO custom fork.
+    # We want the unmodified entropy_esp32.c driver so measurements
+    # reflect the raw WDEV_RND_REG path without BLAKE2s pool conditioning.
+    - name: zephyr
+      remote: zephyrproject
+      repo-path: zephyr
+      revision: v4.1.0
+      path: zephyr
+      import: true
+
+  self:
+    path: .

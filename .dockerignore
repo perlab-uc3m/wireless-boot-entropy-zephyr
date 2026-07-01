@@ -1,0 +1,17 @@
+**/__pycache__/
+**/*.pyc
+.west/
+zephyr/
+modules/
+tools/
+bootloader/
+zephyr-sdk-*/
+*/build/
+*/run/
+*/results/
+*.bin
+*.bin_rest
+*.elf
+*.map
+*.hex
+*.uf2

@@ -1,0 +1,104 @@
+cmake_minimum_required(VERSION 3.20.0)
+
+find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
+project(entropy_capsule_bootstrap)
+
+set(WIFI_SSID_VALUE $ENV{WIFI_SSID})
+set(WIFI_PASS_VALUE $ENV{WIFI_PASS})
+set(TEB_SERVER_IP_VALUE $ENV{TEB_SERVER_IP})
+set(TEB_SERVER_PORT_VALUE $ENV{TEB_SERVER_PORT})
+set(TEB_DEVICE_ID_VALUE $ENV{TEB_DEVICE_ID})
+set(TEB_PUF_BYTES_VALUE $ENV{TEB_PUF_BYTES})
+set(TEB_PUF_DUMP_HEX_VALUE $ENV{TEB_PUF_DUMP_HEX})
+set(TEB_DISABLE_LOCAL_REFILL_VALUE $ENV{TEB_DISABLE_LOCAL_REFILL})
+set(TEB_PROFILE_VALUE $ENV{TEB_PROFILE})
+
+if(DEFINED WIFI_SSID)
+    set(WIFI_SSID_VALUE ${WIFI_SSID})
+endif()
+if(DEFINED WIFI_PASS)
+    set(WIFI_PASS_VALUE ${WIFI_PASS})
+endif()
+if(DEFINED TEB_SERVER_IP)
+    set(TEB_SERVER_IP_VALUE ${TEB_SERVER_IP})
+endif()
+if(DEFINED TEB_SERVER_PORT)
+    set(TEB_SERVER_PORT_VALUE ${TEB_SERVER_PORT})
+endif()
+if(DEFINED TEB_DEVICE_ID)
+    set(TEB_DEVICE_ID_VALUE ${TEB_DEVICE_ID})
+endif()
+if(DEFINED TEB_PUF_BYTES)
+    set(TEB_PUF_BYTES_VALUE ${TEB_PUF_BYTES})
+endif()
+if(DEFINED TEB_PUF_DUMP_HEX)
+    set(TEB_PUF_DUMP_HEX_VALUE ${TEB_PUF_DUMP_HEX})
+endif()
+if(DEFINED TEB_DISABLE_LOCAL_REFILL)
+    set(TEB_DISABLE_LOCAL_REFILL_VALUE ${TEB_DISABLE_LOCAL_REFILL})
+endif()
+if(DEFINED TEB_PROFILE)
+    set(TEB_PROFILE_VALUE ${TEB_PROFILE})
+endif()
+
+if(NOT WIFI_SSID_VALUE)
+    set(WIFI_SSID_VALUE "WIFI_SSID_NOT_SET")
+endif()
+if(NOT WIFI_PASS_VALUE)
+    set(WIFI_PASS_VALUE "WIFI_PASS_NOT_SET")
+endif()
+if(NOT TEB_SERVER_IP_VALUE)
+    set(TEB_SERVER_IP_VALUE "192.168.1.136")
+endif()
+if(NOT TEB_SERVER_PORT_VALUE)
+    set(TEB_SERVER_PORT_VALUE "6767")
+endif()
+if(NOT TEB_DEVICE_ID_VALUE)
+    set(TEB_DEVICE_ID_VALUE "0x4553503332544542")
+endif()
+if(NOT TEB_PUF_BYTES_VALUE)
+    set(TEB_PUF_BYTES_VALUE "4096")
+endif()
+if(NOT TEB_PUF_DUMP_HEX_VALUE)
+    set(TEB_PUF_DUMP_HEX_VALUE "0")
+endif()
+if(NOT TEB_DISABLE_LOCAL_REFILL_VALUE)
+    set(TEB_DISABLE_LOCAL_REFILL_VALUE "1")
+endif()
+if(NOT TEB_PROFILE_VALUE)
+    set(TEB_PROFILE_VALUE "2")
+endif()
+
+zephyr_include_directories(include)
+target_include_directories(app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+target_sources(app PRIVATE
+    src/main.c
+    src/teb_crypto.c
+    src/teb_puf.c
+    src/teb_protocol.c
+    src/wifi.c
+)
+
+target_compile_definitions(app PRIVATE
+    WIFI_SSID="${WIFI_SSID_VALUE}"
+    WIFI_PASS="${WIFI_PASS_VALUE}"
+    TEB_SERVER_IP="${TEB_SERVER_IP_VALUE}"
+    TEB_SERVER_PORT=${TEB_SERVER_PORT_VALUE}
+    TEB_DEVICE_ID=${TEB_DEVICE_ID_VALUE}ULL
+    TEB_PUF_BYTES=${TEB_PUF_BYTES_VALUE}
+    TEB_PUF_DUMP_HEX=${TEB_PUF_DUMP_HEX_VALUE}
+    TEB_DISABLE_LOCAL_REFILL=${TEB_DISABLE_LOCAL_REFILL_VALUE}
+    TEB_SELECTED_PROFILE=${TEB_PROFILE_VALUE}
+)
+
+message(STATUS "...............................................")
+message(STATUS "Asymmetric Entropy Capsule Bootstrap")
+message(STATUS "  WiFi SSID:       ${WIFI_SSID_VALUE}")
+message(STATUS "  Server:          ${TEB_SERVER_IP_VALUE}:${TEB_SERVER_PORT_VALUE}")
+message(STATUS "  Device ID:       ${TEB_DEVICE_ID_VALUE}")
+message(STATUS "  SRAM PUF bytes:  ${TEB_PUF_BYTES_VALUE}")
+message(STATUS "  PUF raw dump:    ${TEB_PUF_DUMP_HEX_VALUE}")
+message(STATUS "  Disable refill:  ${TEB_DISABLE_LOCAL_REFILL_VALUE}")
+message(STATUS "  Capsule profile: ${TEB_PROFILE_VALUE}")
+message(STATUS "...............................................")

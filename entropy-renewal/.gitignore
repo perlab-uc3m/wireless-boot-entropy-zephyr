@@ -1,0 +1,6 @@
+build/
+.west/
+zephyr/
+modules/
+__pycache__/
+*.pyc

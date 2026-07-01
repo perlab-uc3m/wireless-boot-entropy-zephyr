@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+.venv-zephyr/
+*/.venv-zephyr/
+
+# Zephyr workspace
+*.tar.xz
+.west/
+.west-capsule-bootstrap/
+.west-entropy-renewal/
+.west-teb-boot/
+zephyr-sdk-*/
+modules/
+tools/
+bootloader/
+zephyr/
+
+# Build artifacts
+build/
+*/build/
+*/run/
+*.elf
+*.map
+*.hex
+*.uf2
+*.bin.signed
+entropy-capsule-bootstrap/server/teb_pq_beacon_server
+
+# Local configuration and secrets
+.env
+*.env
+
+# Generated captures and analysis output
+*.bin
+*.bin_rest
+*/data/
+*/figures/
+*/logs/
+*/results/
+
+# LaTeX and editor noise
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+.DS_Store

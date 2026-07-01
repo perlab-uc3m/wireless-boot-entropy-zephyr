@@ -1,0 +1,22 @@
+/*
+ * esp32-rf-rng-state/app.overlay
+ *
+ * Devicetree overlay to configure the console UART at high speed (921600 bps)
+ * for rapid raw binary data collection.
+ */
+
+/ {
+	chosen {
+		zephyr,console = &uart0;
+		zephyr,shell-uart = &uart0;
+	};
+};
+
+&uart0 {
+	status = "okay";
+	current-speed = <921600>;
+};
+
+&wifi {
+	status = "okay";
+};

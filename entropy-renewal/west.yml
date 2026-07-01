@@ -1,0 +1,33 @@
+manifest:
+  defaults:
+    remote: zephyrproject
+
+  remotes:
+    - name: fjblanco
+      url-base: https://github.com/fj-blanco
+    - name: zephyrproject
+      url-base: https://github.com/zephyrproject-rtos
+    - name: wolfssl
+      url-base: https://github.com/wolfssl
+
+  projects:
+    # Same Zephyr fork and commit used by the successful QEaaS ESP32 client.
+    - name: zephyr
+      remote: fjblanco
+      repo-path: zephyr
+      revision: 028d1947465c192509694cc1b8b5ef6bc7e1bad1
+      path: zephyr
+      import:
+        name-allowlist:
+          - cmsis
+          - hal_espressif
+          - hal_xtensa
+          - mbedtls
+    - name: wolfssl
+      remote: wolfssl
+      repo-path: wolfssl
+      revision: v5.8.2-stable
+      path: modules/crypto/wolfssl
+
+  self:
+    path: .
