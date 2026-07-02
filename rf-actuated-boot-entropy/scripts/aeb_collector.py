@@ -216,24 +216,54 @@ def fixed_nonce(args: argparse.Namespace) -> bytes:
     return b"\x00" * 16
 
 
-def prepare_outputs(args: argparse.Namespace) -> Tuple[Path, Path, Path, Path, Path]:
+def pack_jitter_delta_u32le(values: list[int]) -> bytes:
+    if not values:
+        return b""
+    return struct.pack("<" + "I" * len(values), *values)
+
+
+def pack_jitter_residual_s32le(values: list[int], interval_us: int) -> bytes:
+    if not values:
+        return b""
+    residuals = [value - interval_us for value in values]
+    return struct.pack("<" + "i" * len(residuals), *residuals)
+
+
+def prepare_outputs(args: argparse.Namespace) -> Tuple[Path, Path, Path, Path, Path, Path, Path, Path]:
     raw_dir = args.out_dir / "raw"
     jitter_dir = args.out_dir / "jitter"
+    joint_dir = args.out_dir / "joint"
     stimulus_dir = args.out_dir / "stimulus"
     raw_dir.mkdir(parents=True, exist_ok=True)
     jitter_dir.mkdir(parents=True, exist_ok=True)
+    joint_dir.mkdir(parents=True, exist_ok=True)
     stimulus_dir.mkdir(parents=True, exist_ok=True)
 
     all_bin = raw_dir / "aeb_all.bin"
+    all_jitter_delta = jitter_dir / "aeb_jitter_delta_u32le_all.bin"
+    all_jitter_residual = jitter_dir / "aeb_jitter_residual_s32le_all.bin"
+    all_joint = joint_dir / "aeb_response_all.bin"
     csv_path = args.out_dir / "aeb_trials.csv"
     manifest_path = args.out_dir / "manifest.json"
 
-    if all_bin.exists() and not args.append:
-        all_bin.unlink()
+    if not args.append:
+        for path in (all_bin, all_jitter_delta, all_jitter_residual, all_joint):
+            if path.exists():
+                path.unlink()
     if csv_path.exists() and not args.append:
         csv_path.unlink()
 
-    return raw_dir, jitter_dir, all_bin, csv_path, manifest_path
+    return (
+        raw_dir,
+        jitter_dir,
+        joint_dir,
+        all_bin,
+        all_jitter_delta,
+        all_jitter_residual,
+        all_joint,
+        csv_path,
+        manifest_path,
+    )
 
 
 def write_manifest(path: Path, args: argparse.Namespace, completed: int) -> None:
@@ -252,7 +282,8 @@ def write_manifest(path: Path, args: argparse.Namespace, completed: int) -> None
         "stimulus_seed": args.stimulus_seed,
         "fixed_nonce": bool(args.fixed_nonce or args.nonce_hex),
         "raw_stream": "pre_hash_wdev_bytes",
-        "jitter_stream": "packet_arrival_deltas_us",
+        "jitter_stream": "packet_arrival_deltas_us_u32le_and_residual_s32le",
+        "joint_stream": "pre_hash_wdev_bytes_followed_by_packet_arrival_deltas_us_u32le",
         "stimulus_stream": "public_start_and_burst_schedule",
         "conditioning": "none for raw files; SHA-256/HKDF only in metadata",
     }
@@ -274,7 +305,18 @@ def ensure_csv(path: Path) -> csv.DictWriter:
         "raw_sha256_reported",
         "raw_sha256_match",
         "jitter_file",
+        "jitter_delta_file",
+        "jitter_residual_file",
+        "jitter_delta_bytes",
+        "jitter_sha256_file",
+        "jitter_sha256_reported",
+        "jitter_sha256_match",
         "jitter_count",
+        "response_file",
+        "response_bytes",
+        "response_sha256_file",
+        "response_sha256_reported",
+        "response_sha256_match",
         "condition",
         "packets_expected",
         "packets_seen",
@@ -319,7 +361,11 @@ def finalize_trial(
     state: TrialState,
     raw_dir: Path,
     jitter_dir: Path,
+    joint_dir: Path,
     all_bin: Path,
+    all_jitter_delta: Path,
+    all_jitter_residual: Path,
+    all_joint: Path,
     writer: csv.DictWriter,
 ) -> bool:
     expected = state.raw_chunks_expected
@@ -338,6 +384,7 @@ def finalize_trial(
     raw_hash = ""
     hash_match = ""
     raw_bytes = 0
+    raw = b""
 
     if complete:
         raw = b"".join(state.raw_chunks[i] for i in range(expected))[:raw_len]
@@ -363,14 +410,56 @@ def finalize_trial(
 
     jitters = jitter_values(state)
     jitter_file = ""
+    jitter_delta_file = ""
+    jitter_residual_file = ""
+    jitter_delta_hash = ""
+    jitter_hash_match = ""
+    jitter_delta_bytes = b""
+    jitter_residual_bytes = b""
     if jitters:
+        interval_us = int(state.result.get("interval_us", state.interval_us) or state.interval_us)
+        jitter_delta_bytes = pack_jitter_delta_u32le(jitters)
+        jitter_residual_bytes = pack_jitter_residual_s32le(jitters, interval_us)
+        jitter_delta_hash = hashlib.sha256(jitter_delta_bytes).hexdigest()
+        jitter_reported = state.result.get("jitter_sha256", "")
+        jitter_hash_match = str(bool(jitter_reported and jitter_reported == jitter_delta_hash))
+
         jitter_file_path = jitter_dir / f"aeb_trial_{state.capture_id:06d}.csv"
         with jitter_file_path.open("w", newline="") as handle:
             jitter_writer = csv.writer(handle)
-            jitter_writer.writerow(["index", "delta_us"])
+            jitter_writer.writerow(["index", "delta_us", "residual_us"])
             for index, value in enumerate(jitters):
-                jitter_writer.writerow([index, value])
+                jitter_writer.writerow([index, value, value - interval_us])
         jitter_file = str(jitter_file_path)
+
+        jitter_delta_path = jitter_dir / f"aeb_trial_{state.capture_id:06d}.delta_u32le.bin"
+        jitter_delta_path.write_bytes(jitter_delta_bytes)
+        jitter_delta_file = str(jitter_delta_path)
+
+        jitter_residual_path = jitter_dir / f"aeb_trial_{state.capture_id:06d}.residual_s32le.bin"
+        jitter_residual_path.write_bytes(jitter_residual_bytes)
+        jitter_residual_file = str(jitter_residual_path)
+
+        with all_jitter_delta.open("ab") as handle:
+            handle.write(jitter_delta_bytes)
+        with all_jitter_residual.open("ab") as handle:
+            handle.write(jitter_residual_bytes)
+
+    response_file = ""
+    response_bytes_len = 0
+    response_hash = ""
+    response_hash_match = ""
+    if complete:
+        response_bytes = raw + jitter_delta_bytes
+        response_bytes_len = len(response_bytes)
+        response_hash = hashlib.sha256(response_bytes).hexdigest()
+        response_reported = state.result.get("response_sha256", "")
+        response_hash_match = str(bool(response_reported and response_reported == response_hash))
+        response_file_path = joint_dir / f"aeb_trial_{state.capture_id:06d}.response.bin"
+        response_file_path.write_bytes(response_bytes)
+        with all_joint.open("ab") as handle:
+            handle.write(response_bytes)
+        response_file = str(response_file_path)
 
     writer.writerow(
         {
@@ -387,7 +476,18 @@ def finalize_trial(
             "raw_sha256_reported": state.result.get("raw_sha256", ""),
             "raw_sha256_match": hash_match,
             "jitter_file": jitter_file,
+            "jitter_delta_file": jitter_delta_file,
+            "jitter_residual_file": jitter_residual_file,
+            "jitter_delta_bytes": len(jitter_delta_bytes),
+            "jitter_sha256_file": jitter_delta_hash,
+            "jitter_sha256_reported": state.result.get("jitter_sha256", ""),
+            "jitter_sha256_match": jitter_hash_match,
             "jitter_count": len(jitters),
+            "response_file": response_file,
+            "response_bytes": response_bytes_len,
+            "response_sha256_file": response_hash,
+            "response_sha256_reported": state.result.get("response_sha256", ""),
+            "response_sha256_match": response_hash_match,
             "condition": state.result.get("condition", ""),
             "packets_expected": state.result.get("packets_expected", ""),
             "packets_seen": state.result.get("packets_seen", ""),
@@ -507,7 +607,17 @@ def main() -> None:
     if args.interval_jitter_us < 0:
         raise SystemExit("--interval-jitter-us must be >= 0")
 
-    raw_dir, jitter_dir, all_bin, csv_path, manifest_path = prepare_outputs(args)
+    (
+        raw_dir,
+        jitter_dir,
+        joint_dir,
+        all_bin,
+        all_jitter_delta,
+        all_jitter_residual,
+        all_joint,
+        csv_path,
+        manifest_path,
+    ) = prepare_outputs(args)
     write_manifest(manifest_path, args, completed=0)
     writer = ensure_csv(csv_path)
 
@@ -587,7 +697,17 @@ def main() -> None:
                     state.raw_chunks_expected = msg.seq_or_count
                 if state.raw_len is None:
                     state.raw_len = msg.sample_bytes
-                complete = finalize_trial(state, raw_dir, jitter_dir, all_bin, writer)
+                complete = finalize_trial(
+                    state,
+                    raw_dir,
+                    jitter_dir,
+                    joint_dir,
+                    all_bin,
+                    all_jitter_delta,
+                    all_jitter_residual,
+                    all_joint,
+                    writer,
+                )
                 states.pop(key, None)
                 if complete:
                     completed += 1
@@ -607,6 +727,9 @@ def main() -> None:
 
     print(f"[collector] completed={completed}")
     print(f"[collector] raw_all={all_bin}")
+    print(f"[collector] jitter_delta_all={all_jitter_delta}")
+    print(f"[collector] jitter_residual_all={all_jitter_residual}")
+    print(f"[collector] joint_all={all_joint}")
     print(f"[collector] csv={csv_path}")
 
 
