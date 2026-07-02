@@ -23,9 +23,10 @@
  *                      channel hopping) without application data,
  *                      separating "RF activity" from "app workload."
  *
- *   4. WIFI_TRAFFIC  - Wi-Fi associated with a concurrent UDP flood
- *                      in a background thread.  Stresses RF TX/RX,
- *                      DMA, interrupts, and CPU scheduling.
+ *   4. UDP_BURST     - Wi-Fi associated while a gateway sends a
+ *                      deterministic public UDP burst train to the DUT.
+ *                      This mirrors the RF-actuated AEB traffic direction
+ *                      while measuring only WDEV bytes.
  *
  * The benchmark does NOT use the custom BLAKE2s entropy pool fork.
  * It reads directly from the stock Zephyr entropy_esp32 driver
@@ -52,7 +53,7 @@
 #include "wifi.h"
 #endif
 
-#if defined(BENCH_CONDITION_WIFI_TRAFFIC)
+#if defined(BENCH_CONDITION_WIFI_TRAFFIC) || defined(BENCH_CONDITION_UDP_BURST)
 #include "udp_flood.h"
 #endif
 
@@ -66,8 +67,10 @@ static const char *get_condition_label(void)
 	return "wifi_idle";
 #elif defined(BENCH_CONDITION_WIFI_SCAN)
 	return "wifi_scan";
+#elif defined(BENCH_CONDITION_UDP_BURST)
+	return "udp_burst";
 #elif defined(BENCH_CONDITION_WIFI_TRAFFIC)
-	return "wifi_traffic";
+	return "udp_burst";
 #else
 	return "unknown";
 #endif
@@ -205,20 +208,20 @@ int main(void)
 	k_sleep(K_MSEC(SCAN_INTERVAL_MS + 2000));
 	printk("[MAIN] Scan thread running - measuring TRNG concurrently\n\n");
 
-#elif defined(BENCH_CONDITION_WIFI_TRAFFIC)
-	printk("\n[MAIN] Condition: WIFI_TRAFFIC\n");
+#elif defined(BENCH_CONDITION_WIFI_TRAFFIC) || defined(BENCH_CONDITION_UDP_BURST)
+	printk("\n[MAIN] Condition: UDP_BURST\n");
 	if (setup_wifi() != 0) {
 		printk("FATAL: Wi-Fi setup failed\n");
 		return EXIT_FAILURE;
 	}
-	printk("[MAIN] Starting UDP flood...\n");
+	printk("[MAIN] Starting deterministic UDP burst receiver...\n");
 	if (udp_flood_start() != 0) {
-		printk("FATAL: UDP flood start failed\n");
+		printk("FATAL: UDP burst receiver start failed\n");
 		return EXIT_FAILURE;
 	}
-	/* Let the flood establish before measuring */
+	/* Give the host a moment to see the IPv4 line and start sending bursts. */
 	k_sleep(K_MSEC(3000));
-	printk("[MAIN] UDP flood running - measuring TRNG concurrently\n\n");
+	printk("[MAIN] UDP burst receiver running - measuring TRNG concurrently\n\n");
 
 #else
 	printk("FATAL: No valid BENCH_CONDITION_* defined\n");
@@ -235,7 +238,7 @@ int main(void)
 	stop_scan_thread();
 #endif
 
-#if defined(BENCH_CONDITION_WIFI_TRAFFIC)
+#if defined(BENCH_CONDITION_WIFI_TRAFFIC) || defined(BENCH_CONDITION_UDP_BURST)
 	udp_flood_stop();
 	udp_flood_report_stats();
 #endif

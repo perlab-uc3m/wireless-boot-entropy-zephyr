@@ -1,8 +1,22 @@
+import argparse
 import json
 from pathlib import Path
 
 
 RESULTS_DIR = Path(__file__).resolve().parents[1] / "results"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Print a Markdown comparison table from randlab manifests."
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default=RESULTS_DIR,
+        help=f"Directory containing <condition>_256m/manifest.json (default: {RESULTS_DIR})",
+    )
+    return parser.parse_args()
 
 
 def load_manifest(path):
@@ -72,9 +86,23 @@ def get_gmt_stats(suite_result):
     return f"{passed_count} / {total_count}"
 
 
+def get_status(suite_result):
+    if not suite_result:
+        return "N/A"
+    return suite_result.get("status", "N/A")
+
+
 def main():
-    results_dir = RESULTS_DIR
-    conditions = ["rf_disabled", "wifi_idle", "wifi_scan", "urandom"]
+    args = parse_args()
+    results_dir = args.results_dir
+    conditions = ["rf_disabled", "wifi_idle", "wifi_scan", "udp_burst", "urandom"]
+    labels = {
+        "rf_disabled": "RF Disabled",
+        "wifi_idle": "Wi-Fi Idle",
+        "wifi_scan": "Wi-Fi Scan",
+        "udp_burst": "UDP Burst",
+        "urandom": "Linux /dev/urandom",
+    }
     manifests = {}
 
     for cond in conditions:
@@ -86,28 +114,29 @@ def main():
 
     # Generate Markdown Table
     print("# ESP32 TRNG Statistical Analysis Comparison\n")
-    print(
-        "| Test Suite / Metric | RF Disabled | Wi-Fi Idle | Wi-Fi Scan | Linux /dev/urandom |"
-    )
-    print("| :--- | :---: | :---: | :---: | :---: |")
+    print("| Test Suite / Metric | " + " | ".join(labels[c] for c in conditions) + " |")
+    print("| :--- | " + " | ".join(":---:" for _ in conditions) + " |")
+
+    def print_metric_row(title, results_by_condition, metric_name, suffix=""):
+        values = [
+            f"{get_metric(results_by_condition[c], metric_name)}{suffix}"
+            for c in conditions
+        ]
+        print(f"| {title} | " + " | ".join(values) + " |")
+
+    def print_value_row(title, values_by_condition):
+        values = [str(values_by_condition[c]) for c in conditions]
+        print(f"| {title} | " + " | ".join(values) + " |")
 
     # ENT
     ent_res = {c: get_suite_result(manifests[c], "ent") for c in manifests}
-    print(
-        f"| **ENT** Entropy (bits/byte) | {get_metric(ent_res['rf_disabled'], 'entropy')} | {get_metric(ent_res['wifi_idle'], 'entropy')} | {get_metric(ent_res['wifi_scan'], 'entropy')} | {get_metric(ent_res['urandom'], 'entropy')} |"
+    print_metric_row("**ENT** Entropy (bits/byte)", ent_res, "entropy")
+    print_metric_row(
+        "**ENT** Chi-Square Exceed %", ent_res, "chi_square_exceed_percent", "%"
     )
-    print(
-        f"| **ENT** Chi-Square Exceed % | {get_metric(ent_res['rf_disabled'], 'chi_square_exceed_percent')}% | {get_metric(ent_res['wifi_idle'], 'chi_square_exceed_percent')}% | {get_metric(ent_res['wifi_scan'], 'chi_square_exceed_percent')}% | {get_metric(ent_res['urandom'], 'chi_square_exceed_percent')}% |"
-    )
-    print(
-        f"| **ENT** Mean Value | {get_metric(ent_res['rf_disabled'], 'arithmetic_mean')} | {get_metric(ent_res['wifi_idle'], 'arithmetic_mean')} | {get_metric(ent_res['wifi_scan'], 'arithmetic_mean')} | {get_metric(ent_res['urandom'], 'arithmetic_mean')} |"
-    )
-    print(
-        f"| **ENT** Monte Carlo Pi | {get_metric(ent_res['rf_disabled'], 'monte_carlo_pi')} | {get_metric(ent_res['wifi_idle'], 'monte_carlo_pi')} | {get_metric(ent_res['wifi_scan'], 'monte_carlo_pi')} | {get_metric(ent_res['urandom'], 'monte_carlo_pi')} |"
-    )
-    print(
-        f"| **ENT** Serial Correlation | {get_metric(ent_res['rf_disabled'], 'serial_correlation')} | {get_metric(ent_res['wifi_idle'], 'serial_correlation')} | {get_metric(ent_res['wifi_scan'], 'serial_correlation')} | {get_metric(ent_res['urandom'], 'serial_correlation')} |"
-    )
+    print_metric_row("**ENT** Mean Value", ent_res, "arithmetic_mean")
+    print_metric_row("**ENT** Monte Carlo Pi", ent_res, "monte_carlo_pi")
+    print_metric_row("**ENT** Serial Correlation", ent_res, "serial_correlation")
 
     # SP 800-90B
     iid_res = {c: get_suite_result(manifests[c], "entropy-iid") for c in manifests}
@@ -117,54 +146,59 @@ def main():
     restart_res = {
         c: get_suite_result(manifests[c], "entropy-restart") for c in manifests
     }
-    print(
-        f"| **SP800-90B IID** Min-Entropy (bits/sample) | {get_metric(iid_res['rf_disabled'], 'min(H_original, 8 X H_bitstring)')} | {get_metric(iid_res['wifi_idle'], 'min(H_original, 8 X H_bitstring)')} | {get_metric(iid_res['wifi_scan'], 'min(H_original, 8 X H_bitstring)')} | {get_metric(iid_res['urandom'], 'min(H_original, 8 X H_bitstring)')} |"
+    print_metric_row(
+        "**SP800-90B IID** Min-Entropy (bits/sample)",
+        iid_res,
+        "min(H_original, 8 X H_bitstring)",
     )
-    print(
-        f"| **SP800-90B Non-IID** Min-Entropy (bits/sample) | {get_metric(non_iid_res['rf_disabled'], 'min(H_original, 8 X H_bitstring)')} | {get_metric(non_iid_res['wifi_idle'], 'min(H_original, 8 X H_bitstring)')} | {get_metric(non_iid_res['wifi_scan'], 'min(H_original, 8 X H_bitstring)')} | {get_metric(non_iid_res['urandom'], 'min(H_original, 8 X H_bitstring)')} |"
+    print_metric_row(
+        "**SP800-90B Non-IID** Min-Entropy (bits/sample)",
+        non_iid_res,
+        "min(H_original, 8 X H_bitstring)",
     )
-    print(
-        f"| **SP800-90B Restart** Min-Entropy (bits/sample) | {get_metric(restart_res['rf_disabled'], 'min(H_r, H_c, H_I)')} | {get_metric(restart_res['wifi_idle'], 'min(H_r, H_c, H_I)')} | {get_metric(restart_res['wifi_scan'], 'min(H_r, H_c, H_I)')} | {get_metric(restart_res['urandom'], 'min(H_r, H_c, H_I)')} |"
+    print_metric_row(
+        "**SP800-90B Restart** Min-Entropy (bits/sample)",
+        restart_res,
+        "min(H_r, H_c, H_I)",
     )
 
     # Borel
     borel_res = {c: get_suite_result(manifests[c], "borel") for c in manifests}
-    print(
-        f"| **Borel** Normality Metric | {get_metric(borel_res['rf_disabled'], 'borel_normality_metric')} | {get_metric(borel_res['wifi_idle'], 'borel_normality_metric')} | {get_metric(borel_res['wifi_scan'], 'borel_normality_metric')} | {get_metric(borel_res['urandom'], 'borel_normality_metric')} |"
-    )
+    print_metric_row("**Borel** Normality Metric", borel_res, "borel_normality_metric")
 
     # AIS31
     p1t0_res = {c: get_suite_result(manifests[c], "ais31-p1-t0") for c in manifests}
     p1t15_res = {c: get_suite_result(manifests[c], "ais31-p1-t1-t5") for c in manifests}
     p2_res = {c: get_suite_result(manifests[c], "ais31-p2") for c in manifests}
-    print(
-        f"| **AIS31** P1-T0 Passed | {get_metric(p1t0_res['rf_disabled'], 'T0')} | {get_metric(p1t0_res['wifi_idle'], 'T0')} | {get_metric(p1t0_res['wifi_scan'], 'T0')} | {get_metric(p1t0_res['urandom'], 'T0')} |"
+    print_metric_row("**AIS31** P1-T0 Passed", p1t0_res, "T0")
+    print_metric_row(
+        "**AIS31** P1-T1-T5 Passed (Outcomes/5)",
+        p1t15_res,
+        "ais31_outcomes_passed",
     )
-    print(
-        f"| **AIS31** P1-T1-T5 Passed (Outcomes/5) | {get_metric(p1t15_res['rf_disabled'], 'ais31_outcomes_passed')} | {get_metric(p1t15_res['wifi_idle'], 'ais31_outcomes_passed')} | {get_metric(p1t15_res['wifi_scan'], 'ais31_outcomes_passed')} | {get_metric(p1t15_res['urandom'], 'ais31_outcomes_passed')} |"
-    )
-    print(
-        f"| **AIS31** P2 Passed (Outcomes/6) | {get_metric(p2_res['rf_disabled'], 'ais31_outcomes_passed')} | {get_metric(p2_res['wifi_idle'], 'ais31_outcomes_passed')} | {get_metric(p2_res['wifi_scan'], 'ais31_outcomes_passed')} | {get_metric(p2_res['urandom'], 'ais31_outcomes_passed')} |"
+    print_metric_row(
+        "**AIS31** P2 Passed (Outcomes/6)", p2_res, "ais31_outcomes_passed"
     )
 
     # GM/T
     gmt_res = {c: get_suite_result(manifests[c], "gmt-sts") for c in manifests}
-    print(
-        f"| **GM/T 0005-2021** Sub-tests Passed | {get_gmt_stats(gmt_res['rf_disabled'])} | {get_gmt_stats(gmt_res['wifi_idle'])} | {get_gmt_stats(gmt_res['wifi_scan'])} | {get_gmt_stats(gmt_res['urandom'])} |"
+    print_value_row(
+        "**GM/T 0005-2021** Sub-tests Passed",
+        {c: get_gmt_stats(gmt_res[c]) for c in conditions},
     )
 
     # Practrand
     pract_res = {c: get_suite_result(manifests[c], "practrand") for c in manifests}
-    print(
-        f"| **Practrand** Status | {pract_res['rf_disabled']['status'] if pract_res['rf_disabled'] else 'N/A'} | {pract_res['wifi_idle']['status'] if pract_res['wifi_idle'] else 'N/A'} | {pract_res['wifi_scan']['status'] if pract_res['wifi_scan'] else 'N/A'} | {pract_res['urandom']['status'] if pract_res['urandom'] else 'N/A'} |"
+    print_value_row(
+        "**Practrand** Status", {c: get_status(pract_res[c]) for c in conditions}
     )
 
     # TestU01
     rabbit_res = {
         c: get_suite_result(manifests[c], "testu01-rabbit") for c in manifests
     }
-    print(
-        f"| **TestU01 Rabbit** Suspect P-values | {get_metric(rabbit_res['rf_disabled'], 'suspect_p_values')} | {get_metric(rabbit_res['wifi_idle'], 'suspect_p_values')} | {get_metric(rabbit_res['wifi_scan'], 'suspect_p_values')} | {get_metric(rabbit_res['urandom'], 'suspect_p_values')} |"
+    print_metric_row(
+        "**TestU01 Rabbit** Suspect P-values", rabbit_res, "suspect_p_values"
     )
 
 

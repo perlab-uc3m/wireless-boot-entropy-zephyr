@@ -7,6 +7,7 @@
  * Adapted from the QEaaS ESP32 client wolfSSL Wi-Fi helper.
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <zephyr/net/net_event.h>
 #include <zephyr/net/net_if.h>
@@ -26,6 +27,7 @@
 #define WIFI_CONNECTION_TIMEOUT_MS 20000
 #define WIFI_CONNECTION_ATTEMPTS   5
 #define WIFI_RETRY_DELAY_MS        2000
+#define WIFI_DHCP_TIMEOUT_MS       20000
 
 struct wifi_connect_req_params wifi_params = {.ssid = WIFI_SSID,
 					      .ssid_length = sizeof(WIFI_SSID) - 1,
@@ -153,6 +155,46 @@ bool wifi_is_connected(void)
 	return wifi_connected;
 }
 
+static bool wifi_has_ipv4(void)
+{
+	struct net_if *iface = wifi_sta_iface();
+
+	if (!iface || !iface->config.ip.ipv4) {
+		return false;
+	}
+
+	for (int i = 0; i < NET_IF_MAX_IPV4_ADDR; i++) {
+		struct net_if_addr *ifaddr = &iface->config.ip.ipv4->unicast[i].ipv4;
+
+		if (!ifaddr->is_used || ifaddr->addr_type == NET_ADDR_ANY ||
+		    ifaddr->address.family != AF_INET) {
+			continue;
+		}
+
+		return true;
+	}
+
+	return false;
+}
+
+int wifi_wait_for_ipv4(int timeout_ms)
+{
+	int waited_ms = 0;
+
+	while (!wifi_has_ipv4() && waited_ms < timeout_ms) {
+		k_sleep(K_MSEC(250));
+		waited_ms += 250;
+	}
+
+	if (!wifi_has_ipv4()) {
+		printk("[RF_WIFI] IPv4 timeout after %d ms\n", waited_ms);
+		return -ETIMEDOUT;
+	}
+
+	wifi_print_ipv4();
+	return 0;
+}
+
 void wifi_mgmt_event_handler(struct net_mgmt_event_callback *cb, uint32_t mgmt_event,
 			     struct net_if *iface)
 {
@@ -240,7 +282,10 @@ int connect_to_wifi(void)
 			printk("Wi-Fi connection requested\n");
 			ret = wait_for_wifi_connection();
 			if (ret == 0) {
-				return 0;
+				ret = wifi_wait_for_ipv4(WIFI_DHCP_TIMEOUT_MS);
+				if (ret == 0) {
+					return 0;
+				}
 			}
 			last_ret = ret;
 		}
@@ -297,4 +342,26 @@ int wifi_trigger_scan(void)
 		return -1;
 	}
 	return 0;
+}
+
+void wifi_print_ipv4(void)
+{
+	struct net_if *iface = wifi_sta_iface();
+
+	if (!iface || !iface->config.ip.ipv4) {
+		return;
+	}
+
+	for (int i = 0; i < NET_IF_MAX_IPV4_ADDR; i++) {
+		struct net_if_addr *ifaddr = &iface->config.ip.ipv4->unicast[i].ipv4;
+		char buf[NET_IPV4_ADDR_LEN];
+
+		if (!ifaddr->is_used || ifaddr->addr_type == NET_ADDR_ANY ||
+		    ifaddr->address.family != AF_INET) {
+			continue;
+		}
+
+		net_addr_ntop(AF_INET, &ifaddr->address.in_addr, buf, sizeof(buf));
+		printk("[RF_WIFI] IPv4 %s\n", buf);
+	}
 }

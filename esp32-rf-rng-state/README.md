@@ -18,7 +18,12 @@ The custom BLAKE2s entropy pool is not in this measurement path.
 | `rf_disabled` | Disabled at boot | None | Pseudorandom control |
 | `wifi_idle` | Associated, DHCP obtained | Keep-alive only | RF-enabled baseline |
 | `wifi_scan` | Associated, scanning | Periodic scan | RF activity without app payload |
-| `wifi_traffic` | Associated, DHCP obtained | UDP flood | RF, interrupt, and DMA stress |
+| `udp_burst` | Associated, DHCP obtained | Deterministic gateway-to-DUT UDP bursts | AEB-like RF stress while measuring WDEV bytes |
+
+`wifi_traffic` is accepted by the helper scripts as a legacy alias for
+`udp_burst`. The old ESP32-to-host flood direction is no longer the default
+because it does not isolate the gateway-to-DUT RF workload used by the
+entropization mechanism.
 
 For each condition, the firmware reports:
 
@@ -31,9 +36,9 @@ For each condition, the firmware reports:
 Each condition uses a separate firmware build because the Wi-Fi driver changes
 the RF subsystem state at boot.
 
-Wi-Fi conditions require Espressif HAL blobs. The helper scripts fetch them
-before Wi-Fi builds. If a manually initialized workspace reports missing blobs,
-run this once:
+Wi-Fi conditions require an initialized Zephyr workspace with the Espressif HAL
+module and blobs. If the build reports missing blobs, run this once from the
+Zephyr workspace:
 
 ```bash
 west blobs fetch hal_espressif
@@ -53,13 +58,32 @@ cd esp32-rf-rng-state
 ./scripts/run_condition.sh --condition wifi_scan \
   --wifi-ssid SSID --wifi-pass PASS --port /dev/ttyUSB0 --raw-delay-ms 1000
 
-./scripts/run_condition.sh --condition wifi_traffic \
-  --wifi-ssid SSID --wifi-pass PASS --port /dev/ttyUSB0 --raw-delay-ms 1000
+./scripts/run_condition.sh --condition udp_burst \
+  --wifi-ssid SSID --wifi-pass PASS --port /dev/ttyUSB0 --raw-delay-ms 1000 \
+  --udp-port 9999 --udp-payload-bytes 64 --udp-byte 0x42 --udp-interval-us 1000
 ```
 
 Outputs are written to `data/<condition>_<bytes>.bin` by default. Long captures
 print progress every 30 seconds. Use `--progress-interval <seconds>` to change
 that cadence.
+
+For paper captures across multiple boards, prefer a board- and date-labeled
+output directory, for example:
+
+```bash
+./scripts/run_condition.sh --condition udp_burst \
+  --wifi-ssid SSID --wifi-pass PASS --port /dev/ttyUSB0 \
+  --output-dir ../../paper/data/rf_rng_state_esp32_devkitc_v4_wroom32_20260702/raw
+```
+
+If the local Zephyr tree uses the newer board name, add:
+
+```bash
+--board esp32_devkitc/esp32/procpu
+```
+
+For the older Zephyr board naming used by the complete local v3.7 workspace,
+the default is `esp32_devkitc_wroom/esp32/procpu`.
 
 For long captures from an editor terminal, use the detached launcher:
 
@@ -80,7 +104,7 @@ serial access:
   --clean --flash
 ./scripts/build.sh --condition wifi_scan --wifi-ssid SSID --wifi-pass PASS \
   --clean --flash
-./scripts/build.sh --condition wifi_traffic --wifi-ssid SSID --wifi-pass PASS \
+./scripts/build.sh --condition udp_burst --wifi-ssid SSID --wifi-pass PASS \
   --clean --flash
 ```
 
@@ -97,6 +121,10 @@ Useful options:
   `[BENCH_META] raw_dump_bytes` field.
 - `--output`: binary output path.
 - `--progress-interval`: seconds between progress lines.
+- `--udp-burst`: send fixed UDP packets during capture.
+- `--udp-target-ip`: override ESP32 IPv4 if DHCP parsing is not available.
+- `--udp-port`, `--udp-payload-bytes`, `--udp-byte`, `--udp-interval-us`:
+  deterministic burst parameters.
 
 ## Randlab
 
@@ -136,3 +164,12 @@ The firmware prints structured serial records:
 
 Use `scripts/compare_results.py` and `scripts/plot_results.py` for local
 summary plots after the raw streams have been analyzed.
+
+For a board/date paper dataset:
+
+```bash
+./scripts/analyze_dataset.sh \
+  --raw-dir ../../paper/data/rf_rng_state_esp32_devkitc_v4_wroom32_20260702/raw \
+  --results-dir ../../paper/data/rf_rng_state_esp32_devkitc_v4_wroom32_20260702/results \
+  --label 256m --profile paper
+```

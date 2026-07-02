@@ -6,10 +6,11 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONDITION="rf_disabled"
 RAW_BYTES="268435456"
+OUTPUT_DIR="$PROJECT_ROOT/data"
 
 usage() {
     cat <<EOF
-Usage: $0 --condition <name> [--raw-bytes <bytes>]
+Usage: $0 --condition <name> [--raw-bytes <bytes>] [--output-dir <dir>]
 EOF
 }
 
@@ -21,6 +22,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --raw-bytes)
             RAW_BYTES="$2"
+            shift 2
+            ;;
+        --output-dir)
+            OUTPUT_DIR="$2"
             shift 2
             ;;
         -h|--help)
@@ -35,7 +40,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-DATA_FILE="$PROJECT_ROOT/data/${CONDITION}_${RAW_BYTES}.bin"
+if [[ "$CONDITION" == "wifi_traffic" ]]; then
+    CONDITION="udp_burst"
+fi
+
+DATA_FILE="$OUTPUT_DIR/${CONDITION}_${RAW_BYTES}.bin"
 SHA_FILE="$DATA_FILE.sha256"
 LOG_FILE="$PROJECT_ROOT/run/${CONDITION}_${RAW_BYTES}.log"
 ALT_LOG_FILE="/tmp/rf-trng-${CONDITION//_/-}-full.log"
@@ -75,7 +84,7 @@ fi
 
 if [[ -f "$LOG_FILE" ]]; then
     echo "Log: $LOG_FILE ($(du -h "$LOG_FILE" | awk '{print $1}'))"
-    grep -E '\[MAIN\]|wifi_connected_before_raw|BENCH_RAW_ARMED|Start marker|Collected:|Success|Error|Timeout|Total Bytes|Captured:' "$LOG_FILE" | tail -20 || true
+    grep -E '\[MAIN\]|\[UDP_BURST\]|udp_rx_|wifi_connected_before_raw|BENCH_RAW_ARMED|Start marker|Collected:|Success|Error|Timeout|Total Bytes|Captured:' "$LOG_FILE" | tail -30 || true
 else
     echo "Log: not found at $LOG_FILE"
 fi

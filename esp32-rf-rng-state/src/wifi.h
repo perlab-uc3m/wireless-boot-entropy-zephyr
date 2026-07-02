@@ -21,12 +21,14 @@ void wifi_mgmt_event_handler(struct net_mgmt_event_callback *cb, uint32_t mgmt_e
 int wifi_init(struct device *unused);
 int shell_cmd_scan(void);
 int wait_for_wifi_connection(void);
+int wifi_wait_for_ipv4(int timeout_ms);
 int connect_to_wifi(void);
 int wifi_reconnect(void);
 void wifi_disconnect(void);
 bool wifi_is_connected(void);
 void wifi_set_event_logging(bool enabled);
 bool wifi_event_logging_enabled(void);
+void wifi_print_ipv4(void);
 
 /**
  * Trigger a Wi-Fi scan (non-blocking).

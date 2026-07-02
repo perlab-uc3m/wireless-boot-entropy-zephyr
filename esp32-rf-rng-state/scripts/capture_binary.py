@@ -14,6 +14,9 @@ import argparse
 import sys
 import time
 import os
+import re
+import socket
+import threading
 
 DEFAULT_BYTES = 268435456
 
@@ -71,7 +74,119 @@ def parse_args():
         default=30.0,
         help="Seconds between progress lines during binary capture (default: 30)",
     )
+    parser.add_argument(
+        "--udp-burst",
+        action="store_true",
+        help="Send deterministic UDP packets to the ESP32 while capturing raw bytes",
+    )
+    parser.add_argument(
+        "--udp-target-ip",
+        default=None,
+        help="ESP32 IPv4 address for UDP bursts. If omitted, parse '[RF_WIFI] IPv4 ...' from serial output.",
+    )
+    parser.add_argument(
+        "--udp-port",
+        type=int,
+        default=9999,
+        help="ESP32 UDP listen port for deterministic bursts (default: 9999)",
+    )
+    parser.add_argument(
+        "--udp-payload-bytes",
+        type=int,
+        default=64,
+        help="UDP payload size for deterministic bursts (default: 64)",
+    )
+    parser.add_argument(
+        "--udp-byte",
+        default="0x42",
+        help="Repeated payload byte, decimal or hex (default: 0x42)",
+    )
+    parser.add_argument(
+        "--udp-interval-us",
+        type=int,
+        default=1000,
+        help="Interval between UDP burst packets (default: 1000 us)",
+    )
+    parser.add_argument(
+        "--udp-start-delay",
+        type=float,
+        default=0.25,
+        help="Seconds to send UDP bursts before triggering raw capture (default: 0.25)",
+    )
+    parser.add_argument(
+        "--post-capture-drain-seconds",
+        type=float,
+        default=5.0,
+        help="Seconds to read text logs after raw byte capture (default: 5)",
+    )
     return parser.parse_args()
+
+
+def parse_udp_byte(value):
+    try:
+        parsed = int(value, 0)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid UDP byte value: {value}") from exc
+    if parsed < 0 or parsed > 255:
+        raise argparse.ArgumentTypeError("--udp-byte must be in [0, 255]")
+    return parsed
+
+
+class UdpBurstSender:
+    def __init__(self, target_ip, port, payload_bytes, payload_byte, interval_us):
+        self.target_ip = target_ip
+        self.port = port
+        self.payload = bytes([payload_byte]) * payload_bytes
+        self.interval_s = interval_us / 1_000_000.0
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._run, name="udp_burst_sender", daemon=True)
+        self.sent_packets = 0
+        self.sent_bytes = 0
+        self.errors = 0
+
+    def start(self):
+        print(
+            f"Starting UDP burst sender to {self.target_ip}:{self.port} "
+            f"({len(self.payload)} B every {self.interval_s * 1_000_000:.0f} us)."
+        )
+        self.thread.start()
+
+    def stop(self):
+        self.stop_event.set()
+        self.thread.join(timeout=2.0)
+
+    def _run(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        next_send = time.perf_counter()
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    sent = sock.sendto(self.payload, (self.target_ip, self.port))
+                    self.sent_packets += 1
+                    self.sent_bytes += sent
+                except OSError:
+                    self.errors += 1
+
+                next_send += self.interval_s
+                sleep_for = next_send - time.perf_counter()
+                if sleep_for > 0:
+                    self.stop_event.wait(sleep_for)
+                else:
+                    next_send = time.perf_counter()
+        finally:
+            sock.close()
+
+
+IPV4_RE = re.compile(rb"((?:\d{1,3}\.){3}\d{1,3})")
+
+
+def extract_ipv4_from_line(line):
+    if b"IPv4" not in line:
+        return None
+    match = IPV4_RE.search(line)
+    if not match:
+        return None
+    return match.group(1).decode("ascii", errors="replace")
 
 
 def reset_esp32(ser):
@@ -102,8 +217,50 @@ def drain_input(ser, seconds):
         ser.reset_input_buffer()
 
 
+def drain_post_capture_logs(ser, seconds):
+    if seconds <= 0:
+        return
+
+    print(f"Reading post-capture firmware logs for {seconds:.1f} s...")
+    deadline = time.time() + seconds
+    previous_timeout = ser.timeout
+    ser.timeout = 0.1
+    line_buf = bytearray()
+
+    try:
+        while time.time() < deadline:
+            data = ser.read(256)
+            if not data:
+                continue
+            line_buf.extend(data)
+            while b"\n" in line_buf:
+                raw_line, _, remainder = line_buf.partition(b"\n")
+                line = bytes(raw_line).strip()
+                if line.startswith(b"["):
+                    decoded_line = line.decode("utf-8", errors="replace")
+                    print(f"[ESP32] {decoded_line}")
+                line_buf = bytearray(remainder)
+    finally:
+        ser.timeout = previous_timeout
+
+
 def main():
     args = parse_args()
+    try:
+        udp_payload_byte = parse_udp_byte(args.udp_byte)
+    except argparse.ArgumentTypeError as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
+
+    if args.udp_port <= 0 or args.udp_port > 65535:
+        print(f"Error: invalid --udp-port value: {args.udp_port}")
+        sys.exit(1)
+    if args.udp_payload_bytes <= 0 or args.udp_payload_bytes > 1400:
+        print(f"Error: invalid --udp-payload-bytes value: {args.udp_payload_bytes}")
+        sys.exit(1)
+    if args.udp_interval_us <= 0:
+        print(f"Error: invalid --udp-interval-us value: {args.udp_interval_us}")
+        sys.exit(1)
 
     print("=============================================")
     print("RF-TRNG Binary Stream Capture")
@@ -116,6 +273,11 @@ def main():
         )
     else:
         print("  Target Size: firmware metadata, fallback 256 MiB")
+    if args.udp_burst:
+        print(
+            f"  UDP Burst:   {args.udp_payload_bytes} B, byte=0x{udp_payload_byte:02x}, "
+            f"interval={args.udp_interval_us} us"
+        )
     print("=============================================")
 
     try:
@@ -146,6 +308,11 @@ def main():
     start_time = time.time()
     firmware_bytes = None
     last_trigger_time = 0.0
+    firmware_ipv4 = args.udp_target_ip
+    raw_armed = False
+    trigger_sent = False
+    udp_wait_reported = False
+    udp_sender = None
 
     scan_buf = bytearray()
     initial_data = b""
@@ -174,9 +341,8 @@ def main():
             initial_data = bytes(scan_buf[after_marker_index:])
             break
 
-        if armed_marker in scan_buf and time.time() - last_trigger_time > 0.25:
-            ser.write(b"G")
-            last_trigger_time = time.time()
+        if armed_marker in scan_buf:
+            raw_armed = True
 
         while b"\n" in scan_buf:
             raw_line, _, remainder = scan_buf.partition(b"\n")
@@ -184,12 +350,42 @@ def main():
             if line.startswith(b"["):
                 decoded_line = line.decode("utf-8", errors="replace")
                 print(f"[ESP32] {decoded_line}")
+            parsed_ipv4 = extract_ipv4_from_line(line)
+            if parsed_ipv4 is not None:
+                firmware_ipv4 = firmware_ipv4 or parsed_ipv4
             if line.startswith(meta_prefix):
                 try:
                     firmware_bytes = int(line.rsplit(b",", 1)[1])
                 except ValueError:
                     pass
+            if line.startswith(armed_marker):
+                raw_armed = True
             scan_buf = bytearray(remainder)
+
+        if raw_armed and not trigger_sent and time.time() - last_trigger_time > 0.25:
+            if args.udp_burst:
+                target_ip = args.udp_target_ip or firmware_ipv4
+                if not target_ip:
+                    if not udp_wait_reported:
+                        print("UDP burst mode armed; waiting for ESP32 IPv4 before raw trigger...")
+                        udp_wait_reported = True
+                    last_trigger_time = time.time()
+                    continue
+                if udp_sender is None:
+                    udp_sender = UdpBurstSender(
+                        target_ip,
+                        args.udp_port,
+                        args.udp_payload_bytes,
+                        udp_payload_byte,
+                        args.udp_interval_us,
+                    )
+                    udp_sender.start()
+                    if args.udp_start_delay > 0:
+                        time.sleep(args.udp_start_delay)
+
+            ser.write(b"G")
+            trigger_sent = True
+            last_trigger_time = time.time()
 
         if len(scan_buf) > 4096:
             del scan_buf[: -len(marker)]
@@ -271,6 +467,7 @@ def main():
         print(
             f"Total Elapsed Time: {time.strftime('%H:%M:%S', time.gmtime(time.time() - transfer_start_time))}"
         )
+        drain_post_capture_logs(ser, args.post_capture_drain_seconds)
 
     except KeyboardInterrupt:
         print("\n\nCollection interrupted by user (Ctrl+C).")
@@ -278,6 +475,12 @@ def main():
     except Exception as e:
         print(f"\n\nError during collection: {e}")
     finally:
+        if udp_sender is not None:
+            udp_sender.stop()
+            print(
+                f"UDP burst sender stopped: {udp_sender.sent_packets:,} packets, "
+                f"{udp_sender.sent_bytes:,} bytes, errors={udp_sender.errors}"
+            )
         ser.close()
 
 

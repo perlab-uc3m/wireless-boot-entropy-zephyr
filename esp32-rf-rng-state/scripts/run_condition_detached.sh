@@ -7,6 +7,7 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_DIR="$PROJECT_ROOT/run"
 CONDITION="rf_disabled"
 RAW_BYTES="268435456"
+OUTPUT_DIR="$PROJECT_ROOT/data"
 ORIGINAL_ARGS=("$@")
 
 while [[ $# -gt 0 ]]; do
@@ -19,11 +20,19 @@ while [[ $# -gt 0 ]]; do
             RAW_BYTES="$2"
             shift 2
             ;;
+        --output-dir)
+            OUTPUT_DIR="$2"
+            shift 2
+            ;;
         *)
             shift
             ;;
     esac
 done
+
+if [[ "$CONDITION" == "wifi_traffic" ]]; then
+    CONDITION="udp_burst"
+fi
 
 mkdir -p "$RUN_DIR"
 LOG_FILE="$RUN_DIR/${CONDITION}_${RAW_BYTES}.log"
@@ -37,5 +46,5 @@ printf '%s\n' "$PID" > "$PID_FILE"
 echo "Started $CONDITION capture"
 echo "  PID:  $PID"
 echo "  Log:  $LOG_FILE"
-echo "  Data: $PROJECT_ROOT/data/${CONDITION}_${RAW_BYTES}.bin"
+echo "  Data: $OUTPUT_DIR/${CONDITION}_${RAW_BYTES}.bin"
 echo "Check status with: $PROJECT_ROOT/scripts/check_condition.sh --condition $CONDITION --raw-bytes $RAW_BYTES"

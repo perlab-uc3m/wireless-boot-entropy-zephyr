@@ -12,6 +12,11 @@ RAW_START_DELAY_MS="15000"
 PROGRESS_INTERVAL="30"
 STARTUP_TIMEOUT="90"
 OUTPUT_DIR="$PROJECT_ROOT/data"
+UDP_TARGET_IP=""
+UDP_BURST_PORT="9999"
+UDP_BURST_PAYLOAD_SIZE="64"
+UDP_BURST_EXPECT_BYTE="0x42"
+UDP_BURST_INTERVAL_US="1000"
 BUILD_ARGS=()
 CAPTURE_ARGS=()
 
@@ -24,8 +29,11 @@ Required for wifi_* conditions:
     --wifi-pass <pass>
 
 Options:
-    --condition <name>   rf_disabled, wifi_idle, wifi_scan, wifi_traffic (default: rf_disabled)
+    --condition <name>   rf_disabled, wifi_idle, wifi_scan, udp_burst (default: rf_disabled)
+                         wifi_traffic remains as a legacy alias for udp_burst
     --port <device>      Serial port (default: /dev/ttyUSB0)
+    --board <target>     Zephyr board target (default: auto-detected ESP32 DevKitC)
+    --build-dir <dir>    Build directory passed to build.sh
     --baud <baud>        Serial baud rate (default: 921600)
     --raw-bytes <bytes>  Bytes to emit and capture (default: 268435456, 256 MiB)
     --raw-delay-ms <ms>  Delay before raw marker (default: 15000)
@@ -35,8 +43,13 @@ Options:
                          Seconds to wait for raw marker after boot (default: 90)
     --capture-reset      Reset ESP32 after opening serial port for capture
     --output-dir <dir>   Capture output directory (default: data/)
-    --udp-ip <ip>        UDP flood target for wifi_traffic
-    --udp-port <port>    UDP flood target port for wifi_traffic
+    --udp-ip <ip>        Override ESP32 target IP for udp_burst capture
+    --udp-port <port>    UDP burst listen port on ESP32 (default: 9999)
+    --udp-payload-bytes <bytes>
+                         Deterministic UDP payload size (default: 64)
+    --udp-byte <value>   Repeated deterministic payload byte (default: 0x42)
+    --udp-interval-us <us>
+                         Host UDP burst interval during capture (default: 1000)
     --no-clean           Reuse existing build directory
     -h|--help            Show this help
 
@@ -85,8 +98,31 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_DIR="$2"
             shift 2
             ;;
-        --wifi-ssid|--wifi-pass|--udp-ip|--udp-port)
+        --wifi-ssid|--wifi-pass|--board|--build-dir)
             BUILD_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        --udp-ip)
+            UDP_TARGET_IP="$2"
+            shift 2
+            ;;
+        --udp-port)
+            UDP_BURST_PORT="$2"
+            BUILD_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        --udp-payload-bytes)
+            UDP_BURST_PAYLOAD_SIZE="$2"
+            BUILD_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        --udp-byte)
+            UDP_BURST_EXPECT_BYTE="$2"
+            BUILD_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        --udp-interval-us)
+            UDP_BURST_INTERVAL_US="$2"
             shift 2
             ;;
         --no-clean)
@@ -106,12 +142,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$CONDITION" in
-    rf_disabled|wifi_idle|wifi_scan|wifi_traffic) ;;
+    rf_disabled|wifi_idle|wifi_scan|udp_burst|wifi_traffic) ;;
     *)
         echo "Invalid condition: $CONDITION"
         exit 1
         ;;
 esac
+
+if [[ "$CONDITION" == "wifi_traffic" ]]; then
+    echo "Note: condition wifi_traffic is a legacy alias for udp_burst."
+    CONDITION="udp_burst"
+fi
 
 if ! [[ "$RAW_BYTES" =~ ^[0-9]+$ ]] || [[ "$RAW_BYTES" -le 0 ]]; then
     echo "Invalid --raw-bytes value: $RAW_BYTES"
@@ -133,15 +174,49 @@ if ! [[ "$STARTUP_TIMEOUT" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
     exit 1
 fi
 
+if ! [[ "$UDP_BURST_PORT" =~ ^[0-9]+$ ]] || [[ "$UDP_BURST_PORT" -le 0 ]] || [[ "$UDP_BURST_PORT" -gt 65535 ]]; then
+    echo "Invalid --udp-port value: $UDP_BURST_PORT"
+    exit 1
+fi
+
+if ! [[ "$UDP_BURST_PAYLOAD_SIZE" =~ ^[0-9]+$ ]] || [[ "$UDP_BURST_PAYLOAD_SIZE" -le 0 ]] || [[ "$UDP_BURST_PAYLOAD_SIZE" -gt 1400 ]]; then
+    echo "Invalid --udp-payload-bytes value: $UDP_BURST_PAYLOAD_SIZE"
+    exit 1
+fi
+
+if ! [[ "$UDP_BURST_EXPECT_BYTE" =~ ^(0x[0-9A-Fa-f]+|[0-9]+)$ ]]; then
+    echo "Invalid --udp-byte value: $UDP_BURST_EXPECT_BYTE"
+    exit 1
+fi
+
+if ! [[ "$UDP_BURST_INTERVAL_US" =~ ^[0-9]+$ ]] || [[ "$UDP_BURST_INTERVAL_US" -le 0 ]]; then
+    echo "Invalid --udp-interval-us value: $UDP_BURST_INTERVAL_US"
+    exit 1
+fi
+
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_FILE="$OUTPUT_DIR/${CONDITION}_${RAW_BYTES}.bin"
 
-BUILD_CMD=("$PROJECT_ROOT/scripts/build.sh" --condition "$CONDITION" --raw-bytes "$RAW_BYTES" --raw-delay-ms "$RAW_START_DELAY_MS" --flash)
+BUILD_CMD=("$PROJECT_ROOT/scripts/build.sh" --condition "$CONDITION" --raw-bytes "$RAW_BYTES" --raw-delay-ms "$RAW_START_DELAY_MS" --flash --flash-port "$PORT")
 if [[ "$DO_CLEAN" == true ]]; then
     BUILD_CMD+=(--clean)
 fi
 
 "${BUILD_CMD[@]}" "${BUILD_ARGS[@]}"
+
+if [[ "$CONDITION" == "udp_burst" ]]; then
+    CAPTURE_ARGS+=(
+        --udp-burst
+        --udp-port "$UDP_BURST_PORT"
+        --udp-payload-bytes "$UDP_BURST_PAYLOAD_SIZE"
+        --udp-byte "$UDP_BURST_EXPECT_BYTE"
+        --udp-interval-us "$UDP_BURST_INTERVAL_US"
+    )
+    if [[ -n "$UDP_TARGET_IP" ]]; then
+        CAPTURE_ARGS+=(--udp-target-ip "$UDP_TARGET_IP")
+    fi
+fi
+
 python3 -u "$PROJECT_ROOT/scripts/capture_binary.py" \
     --port "$PORT" \
     --baud "$BAUD" \

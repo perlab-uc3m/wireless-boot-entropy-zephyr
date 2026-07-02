@@ -1,3 +1,4 @@
+import argparse
 import json
 from pathlib import Path
 
@@ -8,13 +9,34 @@ import numpy as np
 RESULTS_DIR = Path(__file__).resolve().parents[1] / "results"
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Generate comparison plots from randlab manifests."
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default=RESULTS_DIR,
+        help=f"Directory containing <condition>_256m/manifest.json (default: {RESULTS_DIR})",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output PNG path (default: <results-dir>/comparison_plot.png)",
+    )
+    return parser.parse_args()
+
+
 def main():
-    results_dir = RESULTS_DIR
-    conditions = ["rf_disabled", "wifi_idle", "wifi_scan", "urandom"]
+    args = parse_args()
+    results_dir = args.results_dir
+    conditions = ["rf_disabled", "wifi_idle", "wifi_scan", "udp_burst", "urandom"]
     labels = [
         "RF Disabled\n(Baseline)",
         "Wi-Fi Idle\n(Connected)",
         "Wi-Fi Scan\n(Scanning)",
+        "UDP Burst\n(Deterministic)",
         "Linux\n/dev/urandom",
     ]
 
@@ -52,7 +74,7 @@ def main():
     plt.rcParams["axes.edgecolor"] = "#bdc3c7"
     plt.rcParams["axes.linewidth"] = 0.8
 
-    fig, axs = plt.subplots(2, 3, figsize=(15, 10))
+    fig, axs = plt.subplots(2, 3, figsize=(17, 10))
     fig.suptitle(
         "ESP32 TRNG vs Linux /dev/urandom Statistical Comparison",
         fontsize=16,
@@ -231,7 +253,8 @@ def main():
     axs[1, 2].axis("off")
 
     plt.tight_layout()
-    output_path = results_dir / "comparison_plot.png"
+    output_path = args.output or (results_dir / "comparison_plot.png")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=300)
     print(f"Plot successfully saved to: {output_path}")
 

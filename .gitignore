@@ -22,6 +22,7 @@ zephyr/
 # Build artifacts
 build/
 */build/
+esp32-rf-rng-state/build*/
 */run/
 *.elf
 *.map

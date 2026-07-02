@@ -180,6 +180,7 @@ void trng_bench_raw_dump(const struct device *entropy_dev)
 		}
 
 		total -= to_read;
+		k_yield();
 	}
 
 	k_msleep(100); /* Wait for binary transmission to finish before the end marker */
