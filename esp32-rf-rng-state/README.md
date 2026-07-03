@@ -93,6 +93,46 @@ For long captures from an editor terminal, use the detached launcher:
 ./scripts/check_condition.sh --condition wifi_scan
 ```
 
+## Wi-Fi Idle Reboot Slices
+
+To check whether Wi-Fi-idle RNG quality changes after repeated resets, use the
+reboot-slice collector. It builds and flashes one `wifi_idle` firmware image,
+then resets the ESP32 before each short raw dump. The per-boot files are kept
+separate and concatenated for aggregate analysis.
+
+The recommended paper-sized run captures 256 MiB total as 32 reset slices of
+8 MiB each:
+
+```bash
+python3 scripts/collect_reboot_slices.py \
+  --port /dev/ttyUSB0 \
+  --runs 32 \
+  --total-bytes 268435456 \
+  --raw-delay-ms 1000 \
+  --output-root ../../paper/data/wifi_idle_reboot_esp32_devkitc_wroom32_YYYYMMDD
+```
+
+Use `--wifi-ssid` and `--wifi-pass` if they are not supplied by `.env` or the
+environment. Use `--skip-build` to reuse an already flashed matching image.
+
+Analyze the resulting dataset:
+
+```bash
+python3 scripts/analyze_reboot_slices.py \
+  --dataset-root ../../paper/data/wifi_idle_reboot_esp32_devkitc_wroom32_YYYYMMDD \
+  --run-randlab
+```
+
+The analyzer writes per-reboot metrics, fixed-window metrics, a JSON summary,
+and a Markdown interpretation under `results/`. With `--run-randlab`, it also
+runs the paper-profile randlab battery on the concatenated stream. Use
+`--window-bytes` to change the within-reboot chunk size and `--prefix-bytes`
+to change the prefix length checked for cross-reboot repeats.
+
+This benchmark is a post-association Wi-Fi-idle reset test. It is useful for
+detecting reset-to-reset degradation or concentration of failures in later
+slices, but it is not a first-instruction cold-boot entropy capture.
+
 ## Manual Capture
 
 Build and flash without `--monitor`, because the capture script needs exclusive

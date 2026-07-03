@@ -17,6 +17,7 @@ import os
 import re
 import socket
 import threading
+import glob
 
 DEFAULT_BYTES = 268435456
 
@@ -36,7 +37,7 @@ def parse_args():
         "-p",
         "--port",
         default="/dev/ttyUSB0",
-        help="Serial port device (default: /dev/ttyUSB0)",
+        help="Serial port device, or 'auto' to detect one (default: /dev/ttyUSB0)",
     )
     parser.add_argument(
         "-b", "--baud", type=int, default=921600, help="Baud rate (default: 921600)"
@@ -130,6 +131,35 @@ def parse_udp_byte(value):
     if parsed < 0 or parsed > 255:
         raise argparse.ArgumentTypeError("--udp-byte must be in [0, 255]")
     return parsed
+
+
+def detect_serial_port():
+    candidates = []
+    for pattern in ("/dev/serial/by-id/*", "/dev/ttyUSB*", "/dev/ttyACM*"):
+        candidates.extend(glob.glob(pattern))
+
+    try:
+        import serial.tools.list_ports
+
+        for port in serial.tools.list_ports.comports():
+            if port.device not in candidates:
+                candidates.append(port.device)
+    except Exception:
+        pass
+
+    candidates = sorted(dict.fromkeys(candidates))
+    if not candidates:
+        raise RuntimeError("no serial ports found")
+    if len(candidates) == 1:
+        return candidates[0]
+
+    preferred = [
+        path for path in candidates if "CP210" in path or "Silicon_Labs" in path
+    ]
+    if len(preferred) == 1:
+        return preferred[0]
+
+    raise RuntimeError("multiple serial ports found: " + ", ".join(candidates))
 
 
 class UdpBurstSender:
@@ -246,6 +276,13 @@ def drain_post_capture_logs(ser, seconds):
 
 def main():
     args = parse_args()
+    if args.port == "auto":
+        try:
+            args.port = detect_serial_port()
+        except RuntimeError as exc:
+            print(f"Error: {exc}")
+            sys.exit(1)
+        print(f"Auto-detected serial port: {args.port}")
     try:
         udp_payload_byte = parse_udp_byte(args.udp_byte)
     except argparse.ArgumentTypeError as exc:
