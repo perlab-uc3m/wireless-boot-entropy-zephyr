@@ -97,7 +97,14 @@ static int setup_destination(struct sockaddr_in *dst)
 	return 0;
 }
 
-static int request_capsule(const uint8_t hello[TEB_HELLO_LEN], uint8_t capsule[TEB_CAPSULE_LEN])
+struct teb_exchange_metrics {
+	uint32_t exchange_ms;
+	uint32_t send_us;
+	uint32_t wait_ms;
+};
+
+static int request_capsule(const uint8_t hello[TEB_HELLO_LEN], uint8_t capsule[TEB_CAPSULE_LEN],
+			   struct teb_exchange_metrics *metrics)
 {
 	struct sockaddr_in dst;
 	struct timeval timeout = {
@@ -106,6 +113,11 @@ static int request_capsule(const uint8_t hello[TEB_HELLO_LEN], uint8_t capsule[T
 	};
 	int fd;
 	int ret;
+	uint32_t exchange_start_ms;
+	uint32_t send_start_cycles;
+	uint32_t send_end_cycles;
+	uint32_t wait_start_ms;
+	uint32_t recv_end_ms;
 
 	ret = setup_destination(&dst);
 	if (ret < 0) {
@@ -130,7 +142,10 @@ static int request_capsule(const uint8_t hello[TEB_HELLO_LEN], uint8_t capsule[T
 	}
 
 	printf("[TEB_NET] send_hello,%u\n", TEB_HELLO_LEN);
+	exchange_start_ms = k_uptime_get_32();
+	send_start_cycles = k_cycle_get_32();
 	ret = zsock_send(fd, hello, TEB_HELLO_LEN, 0);
+	send_end_cycles = k_cycle_get_32();
 	if (ret != TEB_HELLO_LEN) {
 		int err = errno;
 
@@ -144,6 +159,7 @@ static int request_capsule(const uint8_t hello[TEB_HELLO_LEN], uint8_t capsule[T
 		.events = ZSOCK_POLLIN,
 	};
 
+	wait_start_ms = k_uptime_get_32();
 	ret = zsock_poll(&pfd, 1, 10000);
 	if (ret == 0) {
 		(void)zsock_close(fd);
@@ -163,6 +179,17 @@ static int request_capsule(const uint8_t hello[TEB_HELLO_LEN], uint8_t capsule[T
 		(void)zsock_close(fd);
 		return ret < 0 ? -err : -EMSGSIZE;
 	}
+	recv_end_ms = k_uptime_get_32();
+
+	if (metrics != NULL) {
+		metrics->exchange_ms = recv_end_ms - exchange_start_ms;
+		metrics->send_us = k_cyc_to_us_floor32(send_end_cycles - send_start_cycles);
+		metrics->wait_ms = recv_end_ms - wait_start_ms;
+	}
+	printf("[TEB_METRIC] capsule_exchange_ms,%u\n", recv_end_ms - exchange_start_ms);
+	printf("[TEB_METRIC] hello_send_us,%u\n",
+	       k_cyc_to_us_floor32(send_end_cycles - send_start_cycles));
+	printf("[TEB_METRIC] capsule_wait_ms,%u\n", recv_end_ms - wait_start_ms);
 
 	(void)zsock_close(fd);
 	return 0;
@@ -293,6 +320,7 @@ int main(void)
 	uint8_t hello[TEB_HELLO_LEN];
 	uint8_t capsule[TEB_CAPSULE_LEN];
 	struct entropy_blake2s_renewal_stats stats;
+	struct teb_exchange_metrics exchange_metrics;
 	uint32_t reset_ms = k_uptime_get_32();
 	uint32_t boot_counter;
 	int ret;
@@ -355,7 +383,8 @@ int main(void)
 
 	report_heap("before_capsule");
 
-	ret = request_capsule(hello, capsule);
+	memset(&exchange_metrics, 0, sizeof(exchange_metrics));
+	ret = request_capsule(hello, capsule, &exchange_metrics);
 	if (ret != 0) {
 		printf("[TEB_ERR] request_capsule,%d\n", ret);
 		return 1;

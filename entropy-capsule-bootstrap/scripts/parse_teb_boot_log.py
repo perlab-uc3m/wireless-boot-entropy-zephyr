@@ -41,6 +41,9 @@ CSV_FIELDS = [
     "ipv4_gateway",
     "local_hw_refill",
     "time_to_seed_ms",
+    "capsule_exchange_ms",
+    "capsule_wait_ms",
+    "hello_send_us",
     "verify_us",
     "kem_decaps_us",
     "hkdf_us",
@@ -231,6 +234,9 @@ def summarize(
     }
     for key in (
         "time_to_seed_ms",
+        "capsule_exchange_ms",
+        "capsule_wait_ms",
+        "hello_send_us",
         "verify_us",
         "kem_decaps_us",
         "hkdf_us",
@@ -296,6 +302,12 @@ def write_table_tex(path: Path, summary: dict[str, object]) -> None:
         ("Seeded boots", f"{summary['runs_seeded']} / {summary['runs_attempted']}"),
         ("Profile", str(summary.get("profile", "N/A"))),
         ("Time to first credited seed", stat_text(summary, "time_to_seed_ms", "ms")),
+        (
+            "BOOT_HELLO-to-capsule exchange",
+            stat_text(summary, "capsule_exchange_ms", "ms"),
+        ),
+        ("Capsule receive wait", stat_text(summary, "capsule_wait_ms", "ms")),
+        ("BOOT_HELLO send call", stat_text(summary, "hello_send_us", r"\si{\micro\second}")),
         ("Signature verify", stat_text(summary, "verify_us", r"\si{\micro\second}")),
         (
             "ML-KEM-512 decapsulation",

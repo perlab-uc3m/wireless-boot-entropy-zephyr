@@ -241,13 +241,15 @@ else
     echo "West workspace already present; skipping west update"
 fi
 
-run_west zephyr-export
+run_west zephyr-export 2>/dev/null || true
 run_west blobs fetch hal_espressif 2>/dev/null || true
 
 export WIFI_SSID WIFI_PASS AEB_UDP_PORT AEB_GATEWAY_IP AEB_GATEWAY_PORT
 export AEB_CLIENT_INITIATED AEB_CLIENT_TRIALS AEB_BURST_COUNT AEB_INTERVAL_US
 export AEB_MAX_SAMPLE_BYTES AEB_MAX_BURSTS AEB_RAW_CHUNK_BYTES AEB_TRIAL_GAP_MS
 export AEB_DUMP_RAW_HEX AEB_DUMP_SEED
+export CCACHE_DISABLE="${CCACHE_DISABLE:-1}"
+export CMAKE_PREFIX_PATH="${ZEPHYR_BASE:-$PROJECT_ROOT/../zephyr}/share/zephyr-package/cmake"
 
 run_west build -p auto -b "$BOARD_TARGET" . -DOVERLAY_CONFIG=overlay/wifi.conf \
     -DDTC_OVERLAY_FILE=app.overlay \

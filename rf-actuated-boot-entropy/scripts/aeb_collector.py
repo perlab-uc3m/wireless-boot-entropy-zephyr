@@ -66,6 +66,10 @@ class TrialState:
     jitter_chunks: Dict[int, bytes] = field(default_factory=dict)
     result: Dict[str, str] = field(default_factory=dict)
     hello_time: float = field(default_factory=time.time)
+    start_send_time: Optional[float] = None
+    first_burst_send_time: Optional[float] = None
+    last_burst_send_time: Optional[float] = None
+    result_time: Optional[float] = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -285,6 +289,10 @@ def write_manifest(path: Path, args: argparse.Namespace, completed: int) -> None
         "jitter_stream": "packet_arrival_deltas_us_u32le_and_residual_s32le",
         "joint_stream": "pre_hash_wdev_bytes_followed_by_packet_arrival_deltas_us_u32le",
         "stimulus_stream": "public_start_and_burst_schedule",
+        "host_timing": (
+            "CSV records HELLO-to-START, START-to-last-BURST, first-to-last-BURST, "
+            "and HELLO-to-AEB_RESULT wall-clock timings measured by the collector"
+        ),
         "conditioning": "none for raw files; SHA-256/HKDF only in metadata",
     }
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -322,6 +330,10 @@ def ensure_csv(path: Path) -> csv.DictWriter:
         "packets_seen",
         "interval_us",
         "sample_us",
+        "host_hello_to_start_ms",
+        "host_start_to_last_burst_ms",
+        "host_first_to_last_burst_ms",
+        "host_hello_to_result_ms",
         "ones",
         "transitions",
         "jitter_min_us",
@@ -461,6 +473,23 @@ def finalize_trial(
             handle.write(response_bytes)
         response_file = str(response_file_path)
 
+    hello_to_start_ms = ""
+    start_to_last_burst_ms = ""
+    first_to_last_burst_ms = ""
+    hello_to_result_ms = ""
+    if state.start_send_time is not None:
+        hello_to_start_ms = f"{(state.start_send_time - state.hello_time) * 1000:.3f}"
+    if state.start_send_time is not None and state.last_burst_send_time is not None:
+        start_to_last_burst_ms = (
+            f"{(state.last_burst_send_time - state.start_send_time) * 1000:.3f}"
+        )
+    if state.first_burst_send_time is not None and state.last_burst_send_time is not None:
+        first_to_last_burst_ms = (
+            f"{(state.last_burst_send_time - state.first_burst_send_time) * 1000:.3f}"
+        )
+    if state.result_time is not None:
+        hello_to_result_ms = f"{(state.result_time - state.hello_time) * 1000:.3f}"
+
     writer.writerow(
         {
             "capture_id": state.capture_id,
@@ -493,6 +522,10 @@ def finalize_trial(
             "packets_seen": state.result.get("packets_seen", ""),
             "interval_us": state.result.get("interval_us", state.interval_us),
             "sample_us": state.result.get("sample_us", ""),
+            "host_hello_to_start_ms": hello_to_start_ms,
+            "host_start_to_last_burst_ms": start_to_last_burst_ms,
+            "host_first_to_last_burst_ms": first_to_last_burst_ms,
+            "host_hello_to_result_ms": hello_to_result_ms,
             "ones": state.result.get("ones", ""),
             "transitions": state.result.get("transitions", ""),
             "jitter_min_us": state.result.get("jitter_min_us", ""),
@@ -519,6 +552,7 @@ def send_stimulus(
     nonce: bytes,
     rng: random.Random,
     capture_id: int,
+    hello_time: float,
 ) -> TrialState:
     bursts = args.bursts if args.bursts is not None else msg.seq_or_count
     interval_us = args.interval_us if args.interval_us is not None else msg.interval_us
@@ -529,8 +563,11 @@ def send_stimulus(
     start = make_message(
         TYPE_START, msg.trial, bursts, interval_us, sample_bytes, nonce
     )
+    start_send_time = time.time()
     sock.sendto(start, peer)
     time.sleep(args.start_delay_ms / 1000.0)
+    first_burst_send_time: Optional[float] = None
+    last_burst_send_time: Optional[float] = None
 
     stimulus_dir = args.out_dir / "stimulus"
     stimulus_dir.mkdir(parents=True, exist_ok=True)
@@ -572,6 +609,10 @@ def send_stimulus(
             packet = make_message(
                 TYPE_BURST, msg.trial, seq, sleep_us, sample_bytes, nonce, payload
             )
+            now = time.time()
+            if first_burst_send_time is None:
+                first_burst_send_time = now
+            last_burst_send_time = now
             sock.sendto(packet, peer)
             stimulus_writer.writerow(
                 [
@@ -595,6 +636,10 @@ def send_stimulus(
         bursts=bursts,
         interval_us=interval_us,
         requested_sample_bytes=sample_bytes,
+        hello_time=hello_time,
+        start_send_time=start_send_time,
+        first_burst_send_time=first_burst_send_time,
+        last_burst_send_time=last_burst_send_time,
     )
 
 
@@ -640,6 +685,7 @@ def main() -> None:
         while completed < args.trials:
             try:
                 data, peer = sock.recvfrom(4096)
+                rx_time = time.time()
             except socket.timeout:
                 if time.time() - last_rx > args.idle_timeout:
                     print("[collector] idle timeout")
@@ -656,6 +702,7 @@ def main() -> None:
                 if state is None:
                     continue
                 state.result.update(result)
+                state.result_time = rx_time
                 print(
                     f"[collector] result trial={trial} raw_sha256="
                     f"{result.get('raw_sha256', '')[:16]}..."
@@ -672,7 +719,7 @@ def main() -> None:
                 nonce = fixed if fixed is not None else msg.nonce
                 capture_id = capture_counter
                 capture_counter += 1
-                state = send_stimulus(sock, peer, msg, args, nonce, rng, capture_id)
+                state = send_stimulus(sock, peer, msg, args, nonce, rng, capture_id, rx_time)
                 states[key] = state
                 print(
                     f"[collector] hello capture={state.capture_id} "

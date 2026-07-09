@@ -7,6 +7,11 @@ WORKSPACE_ROOT="${TEB_WEST_WORKSPACE:-$REPO_ROOT/.west-capsule-bootstrap}"
 BUILD_DIR="${TEB_BUILD_DIR:-$WORKSPACE_ROOT/build-capsule-bootstrap}"
 BOARD_TARGET="esp32_devkitc_wroom/esp32/procpu"
 
+if [[ -z "${TEB_WEST_WORKSPACE:-}" && ! -f "$WORKSPACE_ROOT/.west/config" && -f "$REPO_ROOT/.west/config" ]]; then
+    WORKSPACE_ROOT="$REPO_ROOT"
+    BUILD_DIR="${TEB_BUILD_DIR:-$WORKSPACE_ROOT/build-capsule-bootstrap}"
+fi
+
 WIFI_SSID=""
 WIFI_PASS=""
 TEB_SERVER_IP="192.168.1.136"
@@ -119,7 +124,7 @@ fi
 
 init_workspace() {
     mkdir -p "$WORKSPACE_ROOT"
-    west init -l "$PROJECT_ROOT" "$WORKSPACE_ROOT"
+    (cd "$WORKSPACE_ROOT" && west init -l "$PROJECT_ROOT")
     (cd "$WORKSPACE_ROOT" && west update)
     (cd "$WORKSPACE_ROOT" && west blobs fetch hal_espressif 2>/dev/null || true)
 }
@@ -143,6 +148,7 @@ export TEB_PROFILE="$TEB_PROFILE_VALUE"
 
 (cd "$WORKSPACE_ROOT" && CCACHE_DISABLE="${CCACHE_DISABLE:-1}" \
     ZEPHYR_BASE="$WORKSPACE_ROOT/zephyr" \
+    CMAKE_PREFIX_PATH="$WORKSPACE_ROOT/zephyr/share/zephyr-package/cmake" \
     west build -d "$BUILD_DIR" -p auto -b "$BOARD_TARGET" "$PROJECT_ROOT") || {
         echo "Build failed"
         exit 1
