@@ -90,6 +90,17 @@ static uint64_t unix_time_ms(void)
 	return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
 }
 
+static uint64_t monotonic_time_us(void)
+{
+	struct timespec ts;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+		return 0;
+	}
+
+	return (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000ULL;
+}
+
 static int parse_hello(const uint8_t *buf, size_t len, struct teb_hello *hello)
 {
 	if (len != TEB_HELLO_LEN) {
@@ -215,6 +226,8 @@ int main(int argc, char **argv)
 		struct sockaddr_in peer;
 		socklen_t peer_len = sizeof(peer);
 		char peer_addr[INET_ADDRSTRLEN];
+		uint64_t server_start_us = 0;
+		uint64_t server_end_us = 0;
 		ssize_t got;
 
 		got = recvfrom(fd, hello_buf, sizeof(hello_buf), 0, (struct sockaddr *)&peer,
@@ -227,7 +240,9 @@ int main(int argc, char **argv)
 		ret = parse_hello(hello_buf, (size_t)got, &hello);
 		if (ret == 0) {
 			sequence++;
+			server_start_us = monotonic_time_us();
 			ret = build_capsule(&hello, sequence, capsule);
+			server_end_us = monotonic_time_us();
 		}
 
 		inet_ntop(AF_INET, &peer.sin_addr, peer_addr, sizeof(peer_addr));
@@ -240,9 +255,11 @@ int main(int argc, char **argv)
 				       "device=0x%016llx,"
 				       "counter=%u,"
 				       "seq=%u,"
+				       "server_us=%llu,"
 				       "capsule=%zu\n",
 				       peer_addr, ntohs(peer.sin_port),
 				       (unsigned long long)hello.device_id, hello.counter, sequence,
+				       (unsigned long long)(server_end_us - server_start_us),
 				       sizeof(capsule));
 			} else {
 				printf("[TEB_SERVER] reject,peer=%s:%u,error=send:%s\n", peer_addr,

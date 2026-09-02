@@ -33,6 +33,9 @@ extern struct k_heap _system_heap;
 #define TEB_DEVICE_ID 0x4553503332544542ULL
 #endif
 
+#define TEB_CAPSULE_CREDIT_BITS 128U
+#define TEB_POST_IPV4_SETTLE_MS 1000U
+
 #if TEB_SELECTED_PROFILE == TEB_PROFILE_DEV_ED25519_PUF_BEACON
 static const uint8_t gateway_ed25519_pub[TEB_ED25519_PUB_SIZE] = {
 	0x91, 0xb5, 0x57, 0x29, 0xfd, 0x6d, 0x88, 0x1d, 0xf8, 0xdc, 0x43,
@@ -296,12 +299,17 @@ static int accept_capsule(const struct device *entropy_dev, const uint8_t hello[
 		return ret;
 	}
 
-	ret = entropy_add_entropy(entropy_dev, seed, sizeof(seed), sizeof(seed) * 8U);
+	start = k_cycle_get_32();
+	ret = entropy_add_entropy(entropy_dev, seed, sizeof(seed), TEB_CAPSULE_CREDIT_BITS);
+	end = k_cycle_get_32();
+	printf("[TEB_METRIC] entropy_add_us,%u\n", k_cyc_to_us_floor32(end - start));
 	if (ret != 0) {
 		printf("[TEB_ERR] entropy_add,%d\n", ret);
 		return ret;
 	}
 
+	printf("[TEB_META] capsule_input_bytes,%zu\n", sizeof(seed));
+	printf("[TEB_META] capsule_credit_bits,%u\n", TEB_CAPSULE_CREDIT_BITS);
 	printf("[TEB_META] gateway_time_ms,%llu\n", (unsigned long long)fields.gateway_time_ms);
 	printf("[TEB_META] gateway_sequence,%u\n", fields.sequence);
 	teb_print_hex("[TEB_SEED_COMMIT] ", seed, sizeof(seed));
@@ -322,6 +330,10 @@ int main(void)
 	struct entropy_blake2s_renewal_stats stats;
 	struct teb_exchange_metrics exchange_metrics;
 	uint32_t reset_ms = k_uptime_get_32();
+	uint32_t phase_start_ms;
+	uint32_t phase_end_ms;
+	uint32_t processing_start_cycles;
+	uint32_t processing_end_cycles;
 	uint32_t boot_counter;
 	int ret;
 
@@ -330,6 +342,7 @@ int main(void)
 	printf("Profile: %s\n", TEB_PROFILE_NAME);
 	printf("Server: %s:%d\n", TEB_SERVER_IP, TEB_SERVER_PORT);
 	printf("========================================\n");
+	printf("[TEB_META] bootstrap_state,unseeded\n");
 
 	entropy_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_entropy));
 	if (!device_is_ready(entropy_dev)) {
@@ -341,7 +354,13 @@ int main(void)
 
 #if TEB_DISABLE_LOCAL_REFILL
 	entropy_blake2s_renewal_set_hw_refill_enabled(false);
+	ret = entropy_blake2s_renewal_discard_credit();
+	if (ret != 0) {
+		printf("[TEB_ERR] discard_local_credit,%d\n", ret);
+		return 1;
+	}
 	printf("[TEB_META] local_hw_refill,disabled_after_init\n");
+	printf("[TEB_META] local_credit,discarded_for_capsule_only_benchmark\n");
 #else
 	printf("[TEB_META] local_hw_refill,enabled\n");
 #endif
@@ -366,35 +385,60 @@ int main(void)
 	printf("[TEB_META] device_id,0x%llx\n", (unsigned long long)hello_fields.device_id);
 	printf("[TEB_META] boot_counter,%u\n", hello_fields.boot_counter);
 	report_heap("before_wifi");
+	printf("[TEB_METRIC] pre_wifi_ms,%u\n", k_uptime_get_32() - reset_ms);
 
 	wifi_set_event_logging(true);
 	wifi_init(NULL);
+	phase_start_ms = k_uptime_get_32();
 	ret = connect_to_wifi();
+	phase_end_ms = k_uptime_get_32();
+	printf("[TEB_METRIC] wifi_association_ms,%u\n", phase_end_ms - phase_start_ms);
 	if (ret != 0) {
 		printf("[TEB_ERR] wifi,%d\n", ret);
+		printf("[TEB_META] bootstrap_state,failed_unseeded\n");
+		return 1;
+	}
+	phase_start_ms = k_uptime_get_32();
+	ret = start_dhcp();
+	if (ret != 0) {
+		printf("[TEB_ERR] dhcp_start,%d\n", ret);
+		printf("[TEB_META] bootstrap_state,failed_unseeded\n");
 		return 1;
 	}
 	ret = wait_for_ipv4_address();
+	phase_end_ms = k_uptime_get_32();
+	printf("[TEB_METRIC] dhcp_ms,%u\n", phase_end_ms - phase_start_ms);
 	if (ret != 0) {
 		printf("[TEB_ERR] ipv4,%d\n", ret);
+		printf("[TEB_META] bootstrap_state,failed_unseeded\n");
 		return 1;
 	}
-	k_sleep(K_MSEC(1000));
+	printf("[TEB_METRIC] post_ipv4_settle_ms,%u\n", TEB_POST_IPV4_SETTLE_MS);
+	k_sleep(K_MSEC(TEB_POST_IPV4_SETTLE_MS));
 
 	report_heap("before_capsule");
+	printf("[TEB_META] bootstrap_state,waiting_capsule\n");
 
 	memset(&exchange_metrics, 0, sizeof(exchange_metrics));
 	ret = request_capsule(hello, capsule, &exchange_metrics);
 	if (ret != 0) {
 		printf("[TEB_ERR] request_capsule,%d\n", ret);
+		printf("[TEB_META] bootstrap_state,failed_unseeded\n");
 		return 1;
 	}
 
+	processing_start_cycles = k_cycle_get_32();
 	ret = accept_capsule(entropy_dev, hello, &hello_fields, &puf, capsule);
+	processing_end_cycles = k_cycle_get_32();
+	printf("[TEB_METRIC] capsule_processing_us,%u\n",
+	       k_cyc_to_us_floor32(processing_end_cycles - processing_start_cycles));
 	if (ret != 0) {
+		printf("[TEB_META] bootstrap_state,failed_unseeded\n");
 		printf("[TEB_RESULT] failed,%d\n", ret);
 		return 1;
 	}
+	printf("[TEB_METRIC] time_to_seed_ms,%u\n", k_uptime_get_32() - reset_ms);
+	printf("[TEB_META] bootstrap_state,capsule_ready\n");
 
 	if (entropy_blake2s_renewal_snapshot(&stats) == 0) {
 		printf("[TEB_POOL] credited_bits,%u\n", stats.credited_pool_bits);
@@ -404,7 +448,6 @@ int main(void)
 	}
 
 	report_heap("after_capsule");
-	printf("[TEB_METRIC] time_to_seed_ms,%u\n", k_uptime_get_32() - reset_ms);
 	printf("[TEB_RESULT] seeded\n");
 
 	return 0;

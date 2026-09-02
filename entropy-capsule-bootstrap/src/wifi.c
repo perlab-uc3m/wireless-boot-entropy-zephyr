@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 #include <zephyr/net/net_event.h>
+#include <zephyr/net/dhcpv4.h>
 #include <zephyr/net/net_if.h>
 #include <zephyr/net/net_ip.h>
 #include <zephyr/net/socket.h>
@@ -105,6 +106,18 @@ int wait_for_wifi_connection(void)
 		}
 	}
 
+	return 0;
+}
+
+int start_dhcp(void)
+{
+	struct net_if *iface = wifi_sta_iface();
+
+	if (!iface) {
+		return -ENODEV;
+	}
+
+	net_dhcpv4_start(iface);
 	return 0;
 }
 

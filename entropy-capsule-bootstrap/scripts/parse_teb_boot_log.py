@@ -24,6 +24,7 @@ ERR_RE = re.compile(r"^\[TEB_ERR\]\s+(.+)$")
 RESULT_RE = re.compile(r"^\[TEB_RESULT\]\s+(.+)$")
 IPV4_RE = re.compile(r"IPv4 ready: addr=([0-9.]+) gw=([0-9.]+)")
 SERVER_RE = re.compile(r"^\[TEB_SERVER\]\s+served,.*seq=([0-9]+)")
+SERVER_TIME_RE = re.compile(r"^\[TEB_SERVER\]\s+served,.*server_us=([0-9]+)")
 PROFILE_RE = re.compile(r"^Profile:\s+(.+)$")
 
 ED25519_CAPSULE_LEN = 160
@@ -40,16 +41,25 @@ CSV_FIELDS = [
     "ipv4_addr",
     "ipv4_gateway",
     "local_hw_refill",
+    "bootstrap_state",
+    "pre_wifi_ms",
+    "wifi_association_ms",
+    "dhcp_ms",
+    "post_ipv4_settle_ms",
     "time_to_seed_ms",
     "capsule_exchange_ms",
     "capsule_wait_ms",
     "hello_send_us",
+    "capsule_processing_us",
     "verify_us",
     "kem_decaps_us",
     "hkdf_us",
+    "entropy_add_us",
     "hello_tx_bytes",
     "capsule_rx_bytes",
-    "wireless_packets_min",
+    "application_datagrams",
+    "capsule_input_bytes",
+    "capsule_credit_bits",
     "credited_bits",
     "external_bytes",
     "hw_bytes",
@@ -93,7 +103,7 @@ def finalize_run(run: dict[str, object]) -> dict[str, object]:
         "capsule_rx_bytes",
         PQ_CAPSULE_LEN if profile == "pq-mlkem512-mldsa44" else ED25519_CAPSULE_LEN,
     )
-    run.setdefault("wireless_packets_min", 2)
+    run.setdefault("application_datagrams", 2)
     if "result" not in run:
         run["result"] = "incomplete"
 
@@ -174,15 +184,21 @@ def parse_server_log(path: Path | None) -> dict[str, object]:
 
     served = 0
     sequences: list[int] = []
+    server_times_us: list[float] = []
     for raw in path.read_text(errors="replace").splitlines():
-        match = SERVER_RE.match(raw.strip())
+        line = raw.strip()
+        match = SERVER_RE.match(line)
         if match:
             served += 1
             sequences.append(int(match.group(1)))
+        match = SERVER_TIME_RE.match(line)
+        if match:
+            server_times_us.append(float(match.group(1)))
 
     return {
         "server_capsules_served": served,
         "server_sequences": sequences,
+        "server_generation_us": stats(server_times_us),
     }
 
 
@@ -233,13 +249,21 @@ def summarize(
         "server": server,
     }
     for key in (
+        "pre_wifi_ms",
+        "wifi_association_ms",
+        "dhcp_ms",
+        "post_ipv4_settle_ms",
         "time_to_seed_ms",
         "capsule_exchange_ms",
         "capsule_wait_ms",
         "hello_send_us",
+        "capsule_processing_us",
         "verify_us",
         "kem_decaps_us",
         "hkdf_us",
+        "entropy_add_us",
+        "capsule_input_bytes",
+        "capsule_credit_bits",
         "credited_bits",
         "external_bytes",
         "hw_bytes",
@@ -302,12 +326,15 @@ def write_table_tex(path: Path, summary: dict[str, object]) -> None:
         ("Seeded boots", f"{summary['runs_seeded']} / {summary['runs_attempted']}"),
         ("Profile", str(summary.get("profile", "N/A"))),
         ("Time to first credited seed", stat_text(summary, "time_to_seed_ms", "ms")),
+        ("Pre-network setup", stat_text(summary, "pre_wifi_ms", "ms")),
+        ("Wi-Fi association", stat_text(summary, "wifi_association_ms", "ms")),
+        ("DHCP / IPv4", stat_text(summary, "dhcp_ms", "ms")),
+        ("Post-DHCP settling delay", stat_text(summary, "post_ipv4_settle_ms", "ms")),
         (
             "BOOT_HELLO-to-capsule exchange",
             stat_text(summary, "capsule_exchange_ms", "ms"),
         ),
-        ("Capsule receive wait", stat_text(summary, "capsule_wait_ms", "ms")),
-        ("BOOT_HELLO send call", stat_text(summary, "hello_send_us", r"\si{\micro\second}")),
+        ("Capsule processing", stat_text(summary, "capsule_processing_us", r"\si{\micro\second}")),
         ("Signature verify", stat_text(summary, "verify_us", r"\si{\micro\second}")),
         (
             "ML-KEM-512 decapsulation",
@@ -316,9 +343,12 @@ def write_table_tex(path: Path, summary: dict[str, object]) -> None:
             else "N/A",
         ),
         ("HKDF-SHA256", stat_text(summary, "hkdf_us", r"\si{\micro\second}")),
+        ("Pool injection", stat_text(summary, "entropy_add_us", r"\si{\micro\second}")),
         ("BOOT_HELLO / capsule", f"88 B / {capsule_len} B"),
-        ("Minimum wireless packets", "2 UDP datagrams"),
-        ("Credited entropy", stat_text(summary, "credited_bits", "bits")),
+        ("Application payload", f"{88 + capsule_len} B"),
+        ("Application datagrams", "2 UDP datagrams"),
+        ("Capsule input / credit", f"32 B / {stat_text(summary, 'capsule_credit_bits', 'bits')}"),
+        ("Pool credit after capsule", stat_text(summary, "credited_bits", "bits")),
         ("External pool input", stat_text(summary, "external_bytes", "B")),
         ("Local hardware bytes after gate", stat_text(summary, "hw_bytes", "B")),
         ("Heap peak after capsule", stat_text(summary, "heap_peak_after_capsule", "B")),

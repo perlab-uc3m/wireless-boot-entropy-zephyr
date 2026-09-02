@@ -220,6 +220,42 @@ def source_pair_hamming(windows: list[bytes], max_pairs: int, seed: int) -> dict
     return summarize(distances)
 
 
+def consecutive_hamming(windows: list[bytes]) -> dict:
+    distances: list[float] = []
+    for first, second in zip(windows, windows[1:]):
+        denominator = min(len(first), len(second)) * 8
+        if denominator:
+            distances.append(100 * hamming_bits(first, second) / denominator)
+    return summarize(distances)
+
+
+def byte_pearson(first: bytes, second: bytes) -> float | None:
+    pairs = list(zip(first, second))
+    if not pairs:
+        return None
+    first_mean = mean(value for value, _ in pairs)
+    second_mean = mean(value for _, value in pairs)
+    covariance = sum(
+        (first_value - first_mean) * (second_value - second_mean)
+        for first_value, second_value in pairs
+    )
+    first_variance = sum((value - first_mean) ** 2 for value, _ in pairs)
+    second_variance = sum((value - second_mean) ** 2 for _, value in pairs)
+    denominator = math.sqrt(first_variance * second_variance)
+    if denominator == 0:
+        return None
+    return covariance / denominator
+
+
+def consecutive_byte_pearson(windows: list[bytes]) -> dict:
+    correlations = [
+        correlation
+        for first, second in zip(windows, windows[1:])
+        if (correlation := byte_pearson(first, second)) is not None
+    ]
+    return summarize(correlations)
+
+
 def deterministic_stimulus(manifest: dict) -> bool:
     return bool(
         manifest.get("fixed_nonce")
@@ -374,6 +410,8 @@ def main() -> None:
             "trial_hamming_percent": source_pair_hamming(
                 raw_windows, args.max_pairs, args.seed
             ),
+            "consecutive_trial_hamming_percent": consecutive_hamming(raw_windows),
+            "consecutive_trial_byte_pearson": consecutive_byte_pearson(raw_windows),
             "stream": "wdev_all.bin",
         },
         "jitter_delta_u32le": {

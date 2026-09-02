@@ -12,8 +12,10 @@ decapsulation, HKDF, and `entropy_add_entropy()` before any DTLS session starts.
 The default profile uses the post-quantum capsule path:
 
 ```text
-ESP32 cold boot
+ESP32 reset
+  -> disable local refills and discard initial local entropy credit
   -> connect Wi-Fi
+  -> start DHCP explicitly
   -> send BOOT_HELLO over UDP
   -> receive ML-KEM-512 capsule signed with ML-DSA-44
   -> verify ML-DSA-44 with the pinned gateway public key
@@ -28,6 +30,18 @@ main asymmetric capsule claim.
 
 The firmware still contains SRAM startup and timing capture hooks from earlier
 experiments. Treat raw dumps from those hooks as lab-only diagnostics.
+
+The benchmark keeps the initial hardware bytes mixed into the pool but assigns
+them zero entropy credit before networking. A valid ML-KEM-512 capsule injects
+32 bytes and adds at most 128 bits of credit. Signature, transcript, or network
+failure leaves the capsule path unseeded. The benchmark reset is not a physical
+power cycle.
+
+This prototype does not provide durable replay state, request authentication,
+or application-level recovery from fragmented capsule loss. Its volatile boot
+counter restarts after a power-like reset. Use durable counters on both peers,
+authenticate the request before expensive server work, and use idempotent
+retries with reliable blockwise transport in a deployed protocol.
 
 ## Capsule Server
 
@@ -79,6 +93,12 @@ python3 scripts/parse_teb_boot_log.py results/capsule_boot.log \
   --csv results/capsule_boot_runs.csv \
   --summary results/capsule_boot_summary.json
 ```
+
+The parser reports Wi-Fi association, DHCP, the configured post-address settle
+delay, capsule exchange, server work, client processing, credit, application
+bytes, and heap use. The firmware starts DHCP only after association so these
+phases do not overlap. The raw 3252-byte PQ capsule is one UDP datagram and is
+fragmented into three IPv4 packets at a 1500-byte MTU.
 
 To compare the Ed25519 control and PQ capsule profile:
 

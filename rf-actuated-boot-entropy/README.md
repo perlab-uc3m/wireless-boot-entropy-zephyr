@@ -121,7 +121,8 @@ sends `--bursts` `BURST` packets at `--interval-us` spacing. The default burst
 payload is `64` bytes of ASCII `S`. In `--fixed-nonce` mode, the `START` nonce
 is sixteen zero bytes for every trial.
 
-No burst timing, nonce, or payload is counted as entropy. Optional randomized
+No public schedule, nonce, or payload is counted as entropy. Device-observed
+packet-arrival deltas are stored as a separate local response. Optional randomized
 stimuli are available with `--interval-jitter-us` and
 `--payload-mode random`. These are useful for studying a weaker adversary who
 misses part of the public stimulus, but they change the claim: the gateway is
@@ -202,3 +203,17 @@ ask a different question: how variable are the first samples after reset? For
 that, keep the collector running and reset or power-cycle the board many times,
 then treat each per-trial file as one restart observation. Do not concatenate
 restart observations blindly unless the target test expects a continuous stream.
+
+For an automated RTS/EN restart run, build the client for exactly one trial per
+boot, flash it, and run:
+
+```bash
+./scripts/run_restart_experiment.py \
+  --serial /dev/ttyUSB0 --trials 128 \
+  --out-dir results/aeb_restart_YYYYMMDD
+```
+
+The runner starts the UDP collector, pulses RTS only after the preceding upload
+is complete, and records the reset-to-capture mapping in `restart_trials.csv`.
+`status.json` reports live progress and the terminal `complete` or `failed`
+state. This is an EN reset with continuous USB power, not a cold power cycle.
