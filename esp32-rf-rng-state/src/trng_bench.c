@@ -200,7 +200,7 @@ void trng_bench_run_all(const struct device *entropy_dev, const char *condition)
 	BENCH_HEADER();
 
 	/* Metadata */
-	BENCH_META("board", "esp32_devkitc_wroom");
+	BENCH_META("board", CONFIG_BOARD_TARGET);
 	BENCH_META("condition", condition);
 	BENCH_META("entropy_driver", entropy_dev->name);
 	snprintf(meta_buf, sizeof(meta_buf), "%d", TRNG_BENCH_BLOCK_SIZE);

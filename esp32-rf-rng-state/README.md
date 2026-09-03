@@ -82,6 +82,12 @@ If the local Zephyr tree uses the newer board name, add:
 --board esp32_devkitc/esp32/procpu
 ```
 
+For an ESP32-S3 DevKitC-1 connected through its USB-to-UART port, use:
+
+```bash
+--board esp32s3_devkitc/esp32s3/procpu --port /dev/ttyUSB0
+```
+
 For the older Zephyr board naming used by the complete local v3.7 workspace,
 the default is `esp32_devkitc_wroom/esp32/procpu`.
 
@@ -190,7 +196,7 @@ The firmware prints structured serial records:
 ```text
 [BENCH_START]
 [BENCH_META] condition,wifi_idle
-[BENCH_META] board,esp32_devkitc_wroom
+[BENCH_META] board,esp32_devkitc/esp32/procpu
 [BENCH_META] sample_size,32
 [BENCH_META] iterations,500
 [BENCH] trng_latency,32,0,42

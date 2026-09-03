@@ -221,14 +221,13 @@ def extract_ipv4_from_line(line):
 
 def reset_esp32(ser):
     # Keep GPIO0 high and pulse EN low through the common ESP32 USB-UART wiring.
+    ser.reset_input_buffer()
     ser.dtr = False
     ser.rts = False
     time.sleep(0.05)
     ser.rts = True
     time.sleep(0.1)
     ser.rts = False
-    time.sleep(0.5)
-    ser.reset_input_buffer()
 
 
 def drain_input(ser, seconds):
