@@ -1,5 +1,6 @@
 build/
 results/
+build*/
 run/
 *.bin
 *.bin_rest

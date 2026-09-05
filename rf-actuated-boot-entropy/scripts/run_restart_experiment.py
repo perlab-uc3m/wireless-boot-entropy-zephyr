@@ -75,10 +75,35 @@ def write_serial_marker(handle, message: str) -> None:
     handle.write(f"\n[restart-runner {utc_now()}] {message}\n".encode())
 
 
-def drain_serial(port: serial.Serial, handle) -> None:
-    waiting = port.in_waiting
-    if waiting:
-        handle.write(port.read(waiting))
+def drain_serial(port: serial.Serial, handle) -> bool:
+    try:
+        waiting = port.in_waiting
+        if waiting:
+            handle.write(port.read(waiting))
+        return True
+    except (OSError, serial.SerialException):
+        return False
+
+
+def open_serial(path: str, baud: int, timeout: float = 30.0) -> serial.Serial:
+    deadline = time.monotonic() + timeout
+    last_error: Optional[Exception] = None
+    while time.monotonic() < deadline:
+        try:
+            port = serial.Serial()
+            port.port = path
+            port.baudrate = baud
+            port.timeout = 0
+            port.dtr = False
+            port.rts = False
+            port.open()
+            port.dtr = False
+            port.rts = False
+            return port
+        except (OSError, serial.SerialException) as exc:
+            last_error = exc
+            time.sleep(0.25)
+    raise RuntimeError(f"could not open serial device {path}: {last_error}")
 
 
 def wait_for_collector(log_path: Path, process: subprocess.Popen, timeout: float) -> None:
@@ -183,16 +208,7 @@ def main() -> int:
                 collector.terminate()
 
     try:
-        serial_port = serial.Serial()
-        serial_port.port = args.serial
-        serial_port.baudrate = args.baud
-        serial_port.timeout = 0
-        serial_port.dtr = False
-        serial_port.rts = False
-
-        serial_port.open()
-        serial_port.dtr = False
-        serial_port.rts = False
+        serial_port = open_serial(args.serial, args.baud)
         serial_log = serial_log_path.open("ab", buffering=0)
         drain_serial(serial_port, serial_log)
 
@@ -234,7 +250,11 @@ def main() -> int:
             before = completed
             reset_utc = utc_now()
             started = time.monotonic()
-            drain_serial(serial_port, serial_log)
+            if not drain_serial(serial_port, serial_log):
+                if serial_port.is_open:
+                    serial_port.close()
+                serial_port = open_serial(args.serial, args.baud)
+                write_serial_marker(serial_log, "serial device reconnected")
             write_serial_marker(serial_log, f"reset attempt {attempts}")
             pulse_en(serial_port, args.reset_pulse_ms / 1000.0)
 
@@ -256,11 +276,19 @@ def main() -> int:
                     raise RuntimeError(
                         f"collector exited with status {collector.returncode}"
                     )
-                drain_serial(serial_port, serial_log)
+                if not drain_serial(serial_port, serial_log):
+                    if serial_port.is_open:
+                        serial_port.close()
+                    serial_port = open_serial(args.serial, args.baud)
+                    write_serial_marker(serial_log, "serial device reconnected")
                 time.sleep(0.25)
                 rows = complete_rows(trial_csv_path)
 
-            drain_serial(serial_port, serial_log)
+            if not drain_serial(serial_port, serial_log):
+                if serial_port.is_open:
+                    serial_port.close()
+                serial_port = open_serial(args.serial, args.baud)
+                write_serial_marker(serial_log, "serial device reconnected")
 
             elapsed = time.monotonic() - started
             if len(rows) > before:

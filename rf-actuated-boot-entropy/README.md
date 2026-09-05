@@ -85,12 +85,16 @@ Create `.env` or pass credentials directly:
 ```bash
 cp .env.example .env
 ./scripts/build.sh --wifi-ssid MySSID --wifi-pass MyPass \
+  --board esp32s3_devkitc/esp32s3/procpu \
   --gateway-ip 192.168.1.50 --trials 128 \
   --max-sample-bytes 8192 --bursts 64 --interval-us 1000 \
-  --clean --flash
+  --flash-port /dev/ttyUSB0 --clean --flash
 ```
 
 The script uses the shared Zephyr workspace at the repository root.
+For lossy result uploads, `--raw-chunk-bytes 1200 --upload-gap-us 1000`
+reduces the packet count and spaces the raw upload. This transfer occurs after
+the measured collection window.
 
 ## Client-Initiated Collector
 

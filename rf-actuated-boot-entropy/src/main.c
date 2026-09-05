@@ -65,6 +65,10 @@
 #define AEB_RAW_CHUNK_BYTES 512
 #endif
 
+#ifndef AEB_UPLOAD_GAP_US
+#define AEB_UPLOAD_GAP_US 0
+#endif
+
 #ifndef AEB_TRIAL_GAP_MS
 #define AEB_TRIAL_GAP_MS 250
 #endif
@@ -444,6 +448,9 @@ static int send_raw_stream(int fd, const struct aeb_msg *start, const uint8_t *r
 		if (ret != 0) {
 			return ret;
 		}
+		if (AEB_UPLOAD_GAP_US > 0) {
+			k_sleep(K_USEC(AEB_UPLOAD_GAP_US));
+		}
 	}
 
 	if (jitter_values_per_chunk == 0) {
@@ -700,26 +707,44 @@ static int send_hello(int fd, uint32_t trial_id, const uint8_t nonce[16])
 	return 0;
 }
 
-static int wait_for_start(int fd, uint32_t trial_id, struct aeb_msg *start)
+static int wait_for_start(int fd, uint32_t trial_id, const uint8_t nonce[16],
+			  struct aeb_msg *start)
 {
 	uint8_t recv_buf[AEB_RECV_BUF_LEN];
 	int64_t deadline = k_uptime_get() + AEB_START_TIMEOUT_MS;
+	int64_t next_hello = k_uptime_get() + 1000;
 
 	while (k_uptime_get() < deadline) {
 		struct zsock_pollfd pfd = {
 			.fd = fd,
 			.events = ZSOCK_POLLIN,
 		};
-		int remaining = (int)(deadline - k_uptime_get());
+		int64_t now = k_uptime_get();
+		int remaining;
 		int ret;
 
+		if (now >= next_hello) {
+			ret = send_hello(fd, trial_id, nonce);
+			if (ret != 0) {
+				return ret;
+			}
+			next_hello = now + 1000;
+		}
+
+		remaining = (int)(deadline - now);
+		if (remaining > 1000) {
+			remaining = 1000;
+		}
 		if (remaining < 0) {
 			remaining = 0;
 		}
 
 		ret = zsock_poll(&pfd, 1, remaining);
-		if (ret <= 0) {
-			return ret == 0 ? -ETIMEDOUT : -errno;
+		if (ret == 0) {
+			continue;
+		}
+		if (ret < 0) {
+			return -errno;
 		}
 
 		ret = zsock_recv(fd, recv_buf, sizeof(recv_buf), ZSOCK_MSG_DONTWAIT);
@@ -771,7 +796,7 @@ static void client_hello_loop(const struct device *entropy_dev)
 			continue;
 		}
 
-		ret = wait_for_start(fd, trial, &start);
+		ret = wait_for_start(fd, trial, nonce, &start);
 		if (ret != 0) {
 			printk("[AEB_ERR] trial=%u start_timeout=%d\n", trial, ret);
 			k_sleep(K_MSEC(AEB_TRIAL_GAP_MS));

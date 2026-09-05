@@ -4,7 +4,8 @@
 set -e
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BOARD_TARGET="esp32_devkitc_wroom/esp32/procpu"
+BOARD_TARGET="${BOARD_TARGET:-esp32_devkitc_wroom/esp32/procpu}"
+BUILD_DIR="${BUILD_DIR:-$PROJECT_ROOT/build}"
 
 WIFI_SSID=""
 WIFI_PASS=""
@@ -18,6 +19,7 @@ AEB_INTERVAL_US="1000"
 AEB_MAX_SAMPLE_BYTES="8192"
 AEB_MAX_BURSTS="256"
 AEB_RAW_CHUNK_BYTES="512"
+AEB_UPLOAD_GAP_US="0"
 AEB_TRIAL_GAP_MS="250"
 AEB_DUMP_RAW_HEX="0"
 AEB_DUMP_SEED="0"
@@ -33,6 +35,7 @@ DO_CLEAN=false
 DO_INIT=false
 DO_FLASH=false
 DO_MONITOR=false
+FLASH_PORT=""
 
 run_west() {
     if [[ -n "${WEST_PYTHON:-}" ]]; then
@@ -51,6 +54,8 @@ Required:
   --wifi-pass <pass>       Wi-Fi password
 
 Optional:
+  --board <target>         Zephyr board target (default: $BOARD_TARGET)
+  --build-dir <dir>        Build directory (default: $BUILD_DIR)
   --gateway-ip <ip>        Collector/gateway IPv4 address for client HELLO mode
   --gateway-port <port>    Collector/gateway UDP port (default: 7778)
   --listen-mode            Use legacy host-initiated listener mode
@@ -61,12 +66,14 @@ Optional:
   --max-sample-bytes <n>   Max local response bytes per trial (default: 8192)
   --max-bursts <n>         Max burst packets per trial (default: 256)
   --raw-chunk-bytes <n>    Raw UDP upload payload bytes per chunk (default: 512)
+  --upload-gap-us <n>      Delay after each raw upload packet (default: 0)
   --trial-gap-ms <n>       Delay between client trials (default: 250)
   --dump-raw               Print raw response as hex chunks (lab only)
   --dump-seed              Print derived seed (lab only)
   --clean                  Remove build directory first
   --init                   Initialize/update west workspace
   --flash                  Flash after build
+  --flash-port <device>    Serial device used by the ESP32 flash runner
   --monitor                Open serial monitor after flash
   -h|--help                Show this help
 
@@ -83,6 +90,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --wifi-pass)
             WIFI_PASS="$2"
+            shift 2
+            ;;
+        --board)
+            BOARD_TARGET="$2"
+            shift 2
+            ;;
+        --build-dir)
+            BUILD_DIR="$2"
             shift 2
             ;;
         --udp-port)
@@ -125,6 +140,10 @@ while [[ $# -gt 0 ]]; do
             AEB_RAW_CHUNK_BYTES="$2"
             shift 2
             ;;
+        --upload-gap-us)
+            AEB_UPLOAD_GAP_US="$2"
+            shift 2
+            ;;
         --trial-gap-ms)
             AEB_TRIAL_GAP_MS="$2"
             shift 2
@@ -148,6 +167,10 @@ while [[ $# -gt 0 ]]; do
         --flash)
             DO_FLASH=true
             shift
+            ;;
+        --flash-port)
+            FLASH_PORT="$2"
+            shift 2
             ;;
         --monitor)
             DO_MONITOR=true
@@ -175,6 +198,11 @@ for value_name in AEB_UDP_PORT AEB_GATEWAY_PORT AEB_CLIENT_INITIATED \
     fi
 done
 
+if ! [[ "$AEB_UPLOAD_GAP_US" =~ ^[0-9]+$ ]]; then
+    echo "Invalid AEB_UPLOAD_GAP_US=$AEB_UPLOAD_GAP_US"
+    exit 1
+fi
+
 for positive_name in AEB_UDP_PORT AEB_GATEWAY_PORT AEB_CLIENT_TRIALS \
     AEB_MAX_SAMPLE_BYTES AEB_MAX_BURSTS AEB_RAW_CHUNK_BYTES; do
     value="${!positive_name}"
@@ -183,6 +211,20 @@ for positive_name in AEB_UDP_PORT AEB_GATEWAY_PORT AEB_CLIENT_TRIALS \
         exit 1
     fi
 done
+
+BUILD_DIR="$(realpath -m "$BUILD_DIR")"
+case "$BUILD_DIR" in
+    "$PROJECT_ROOT"|/|"")
+        echo "Refusing unsafe build directory: $BUILD_DIR"
+        exit 1
+        ;;
+    "$PROJECT_ROOT"/*)
+        ;;
+    *)
+        echo "Build directory must be inside $PROJECT_ROOT"
+        exit 1
+        ;;
+esac
 
 if [[ -z "$WIFI_SSID" || -z "$WIFI_PASS" ]]; then
     echo "Wi-Fi credentials required. Use --wifi-ssid/--wifi-pass or .env"
@@ -201,6 +243,8 @@ fi
 
 echo "============================================="
 echo "RF-Actuated Boot Entropy Build"
+echo "  Board:            $BOARD_TARGET"
+echo "  Build dir:         $BUILD_DIR"
 echo "  WiFi SSID:        $WIFI_SSID"
 echo "  UDP port:         $AEB_UDP_PORT"
 echo "  Gateway:          ${AEB_GATEWAY_IP:-n/a}:$AEB_GATEWAY_PORT"
@@ -211,6 +255,7 @@ echo "  Interval us:      $AEB_INTERVAL_US"
 echo "  Max sample bytes: $AEB_MAX_SAMPLE_BYTES"
 echo "  Max bursts:       $AEB_MAX_BURSTS"
 echo "  Raw chunk bytes:  $AEB_RAW_CHUNK_BYTES"
+echo "  Upload gap us:    $AEB_UPLOAD_GAP_US"
 echo "  Trial gap ms:     $AEB_TRIAL_GAP_MS"
 echo "  Dump raw hex:     $AEB_DUMP_RAW_HEX"
 echo "  Dump seed:        $AEB_DUMP_SEED"
@@ -219,7 +264,7 @@ echo "============================================="
 cd "$PROJECT_ROOT"
 
 if [ "$DO_CLEAN" = true ]; then
-    rm -rf build/
+    rm -rf "$BUILD_DIR"
     find . -name "CMakeCache.txt" -delete 2>/dev/null || true
     find . -name "CMakeFiles" -type d -exec rm -rf {} + 2>/dev/null || true
 fi
@@ -247,11 +292,12 @@ run_west blobs fetch hal_espressif 2>/dev/null || true
 export WIFI_SSID WIFI_PASS AEB_UDP_PORT AEB_GATEWAY_IP AEB_GATEWAY_PORT
 export AEB_CLIENT_INITIATED AEB_CLIENT_TRIALS AEB_BURST_COUNT AEB_INTERVAL_US
 export AEB_MAX_SAMPLE_BYTES AEB_MAX_BURSTS AEB_RAW_CHUNK_BYTES AEB_TRIAL_GAP_MS
+export AEB_UPLOAD_GAP_US
 export AEB_DUMP_RAW_HEX AEB_DUMP_SEED
 export CCACHE_DISABLE="${CCACHE_DISABLE:-1}"
 export CMAKE_PREFIX_PATH="${ZEPHYR_BASE:-$PROJECT_ROOT/../zephyr}/share/zephyr-package/cmake"
 
-run_west build -p auto -b "$BOARD_TARGET" . -DOVERLAY_CONFIG=overlay/wifi.conf \
+run_west build -p auto -d "$BUILD_DIR" -b "$BOARD_TARGET" . -DOVERLAY_CONFIG=overlay/wifi.conf \
     -DDTC_OVERLAY_FILE=app.overlay \
     -DWIFI_SSID="$WIFI_SSID" \
     -DWIFI_PASS="$WIFI_PASS" \
@@ -265,12 +311,17 @@ run_west build -p auto -b "$BOARD_TARGET" . -DOVERLAY_CONFIG=overlay/wifi.conf \
     -DAEB_MAX_SAMPLE_BYTES="$AEB_MAX_SAMPLE_BYTES" \
     -DAEB_MAX_BURSTS="$AEB_MAX_BURSTS" \
     -DAEB_RAW_CHUNK_BYTES="$AEB_RAW_CHUNK_BYTES" \
+    -DAEB_UPLOAD_GAP_US="$AEB_UPLOAD_GAP_US" \
     -DAEB_TRIAL_GAP_MS="$AEB_TRIAL_GAP_MS" \
     -DAEB_DUMP_RAW_HEX="$AEB_DUMP_RAW_HEX" \
     -DAEB_DUMP_SEED="$AEB_DUMP_SEED"
 
 if [ "$DO_FLASH" = true ]; then
-    run_west flash
+    FLASH_ARGS=()
+    if [[ -n "$FLASH_PORT" ]]; then
+        FLASH_ARGS+=(--esp-device "$FLASH_PORT")
+    fi
+    run_west flash -d "$BUILD_DIR" "${FLASH_ARGS[@]}"
 fi
 
 if [ "$DO_MONITOR" = true ]; then
